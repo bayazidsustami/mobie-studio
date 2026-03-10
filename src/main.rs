@@ -1,48 +1,55 @@
-use gpui::*;
-
 pub mod agent;
 pub mod device;
 pub mod llm;
 pub mod ui;
 
-struct MobieStudio {
-    text: SharedString,
-}
+use gpui::*;
+use tracing::info;
 
-impl Render for MobieStudio {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<'_, Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .bg(rgb(0x2e2e2e))
-            .size_full()
-            .justify_center()
-            .items_center()
-            .text_xl()
-            .text_color(rgb(0xffffff))
-            .child(self.text.clone())
-    }
-}
+use crate::agent::AgentEngine;
+use crate::ui::{MobieWorkspace, SendMessage};
 
 fn main() {
-    // Initialize tracing for logs
+    // Initialize structured logging
     tracing_subscriber::fmt::init();
-    tracing::info!("Starting Mobie Studio...");
+    info!("Starting Mobie Studio...");
 
-    let app = Application::new();
-    
-    app.run(|cx: &mut App| {
-        let options = WindowOptions {
-            titlebar: Some(TitlebarOptions {
-                title: Some("Mobie Studio".into()),
+    Application::new().run(|app| {
+        // Bind key actions
+        app.bind_keys([
+            KeyBinding::new("enter", SendMessage, None),
+        ]);
+
+        app.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1200.0), px(780.0)),
+                    app,
+                ))),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
+            },
+            |window, app| {
+                // Create channels for agent ↔ UI communication
+                let (update_tx, update_rx) = tokio::sync::mpsc::channel(64);
+                let (engine, cmd_rx) = AgentEngine::start(update_tx.clone());
 
-        cx.open_window(options, |_window, cx| {
-            cx.new(|_cx| MobieStudio {
-                text: "Welcome to Mobie Studio (Agent Ready)".into(),
-            })
-        }).unwrap();
+                // Spawn the agent loop in the background
+                app.background_executor()
+                    .spawn(AgentEngine::run_loop(cmd_rx, update_tx))
+                    .detach();
+
+                // Focus the window for keyboard input
+                let entity = app.new(|cx| {
+                    MobieWorkspace::new(cx, engine.sender, update_rx)
+                });
+
+                let focus_handle = entity.read(app).focus_handle().clone();
+                focus_handle.focus(window);
+
+                entity
+            },
+        )
+        .unwrap();
     });
 }
