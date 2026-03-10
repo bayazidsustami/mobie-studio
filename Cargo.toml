@@ -19,6 +19,9 @@ serde_yaml = "0.9"
 # Error Handling
 anyhow = "1.0"
 
+# HTTP Client (for LLM BYOK API calls)
+reqwest = { version = "0.12", features = ["json"] }
+
 # Logging & Observability
 tracing = "0.1"
 tracing-subscriber = "0.3"
