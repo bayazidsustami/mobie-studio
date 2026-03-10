@@ -1,0 +1,24 @@
+[package]
+name = "mobie"
+version = "0.1.0"
+edition = "2021"
+description = "Mobie Studio: AI-powered desktop application for automated mobile testing"
+
+[dependencies]
+# Async Runtime & Concurrency
+tokio = { version = "1.36", features = ["full"] }
+
+# UI Framework
+gpui = "0.2.2"
+
+# Serialization & Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Error Handling
+anyhow = "1.0"
+
+# Logging & Observability
+tracing = "0.1"
+tracing-subscriber = "0.3"
