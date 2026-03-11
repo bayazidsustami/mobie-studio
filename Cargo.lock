@@ -3176,12 +3176,14 @@ name = "mobie"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs 5.0.1",
  "gpui",
  "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
  "tokio",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
 ]
