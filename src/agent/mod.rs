@@ -1,7 +1,10 @@
-use tokio::sync::mpsc;
-use tracing::info;
+pub mod action;
 
-use crate::device::DeviceBridge;
+use tokio::sync::mpsc;
+use tracing::{error, info, warn};
+
+use crate::agent::action::Action;
+use crate::device::{compress_xml, DeviceBridge};
 use crate::llm::{LlmClient, LlmConfig};
 
 // ---------------------------------------------------------------------------
@@ -30,6 +33,9 @@ pub enum AgentUpdate {
     AgentReply(String),
 }
 
+/// Maximum iterations per goal to prevent infinite loops.
+const MAX_ITERATIONS: usize = 20;
+
 // ---------------------------------------------------------------------------
 // Agent Engine
 // ---------------------------------------------------------------------------
@@ -51,6 +57,12 @@ impl AgentEngine {
     }
 
     /// The core agent loop.  Runs inside a background task.
+    ///
+    /// For each goal the loop executes:
+    ///   1. **Observe** — dump the UI tree via ADB and compress it.
+    ///   2. **Think**   — send the compressed XML + goal to the LLM.
+    ///   3. **Act**     — execute the decided action via ADB.
+    ///   4. **Repeat**  — unless the action is `Done` or max iterations hit.
     pub async fn run_loop(
         mut cmd_rx: mpsc::Receiver<AgentMessage>,
         update_tx: mpsc::Sender<AgentUpdate>,
@@ -58,57 +70,149 @@ impl AgentEngine {
         let device = DeviceBridge::new();
         let llm = LlmClient::new(LlmConfig::default());
 
-        let mut status = AgentStatus::Idle;
-        info!("Agent Engine started. Status: {:?}", status);
+        info!("Agent Engine started. Waiting for goals...");
+        let _ = update_tx
+            .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
+            .await;
 
         while let Some(msg) = cmd_rx.recv().await {
             match msg {
                 AgentMessage::StartGoal(goal) => {
                     info!("Received new goal: {}", goal);
+                    let _ = update_tx
+                        .send(AgentUpdate::AgentReply(format!(
+                            "🎯 Starting goal: \"{}\"",
+                            goal
+                        )))
+                        .await;
 
-                    // --- Observe ---
-                    status = AgentStatus::Observing;
-                    let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
+                    let mut iteration = 0usize;
 
-                    let ui_dump = match device.observe_ui().await {
-                        Ok(xml) => xml,
-                        Err(e) => {
-                            status = AgentStatus::Error(e.to_string());
-                            let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
-                            continue;
+                    loop {
+                        iteration += 1;
+                        if iteration > MAX_ITERATIONS {
+                            warn!("Max iterations ({}) reached for goal", MAX_ITERATIONS);
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(format!(
+                                    "⚠️ Stopped after {} iterations — goal may not be achievable.",
+                                    MAX_ITERATIONS
+                                )))
+                                .await;
+                            break;
                         }
-                    };
 
-                    // --- Think ---
-                    status = AgentStatus::Thinking;
-                    let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
+                        info!("--- Iteration {}/{} ---", iteration, MAX_ITERATIONS);
 
-                    let response = match llm.think(&ui_dump, &goal).await {
-                        Ok(resp) => resp,
-                        Err(e) => {
-                            status = AgentStatus::Error(e.to_string());
-                            let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
-                            continue;
+                        // ============================================
+                        // 1. OBSERVE — dump and compress the UI tree
+                        // ============================================
+                        let _ = update_tx
+                            .send(AgentUpdate::StatusChanged(AgentStatus::Observing))
+                            .await;
+
+                        let raw_xml = match device.observe_ui().await {
+                            Ok(xml) => xml,
+                            Err(e) => {
+                                error!("Observe failed: {}", e);
+                                let _ = update_tx
+                                    .send(AgentUpdate::StatusChanged(AgentStatus::Error(
+                                        e.to_string(),
+                                    )))
+                                    .await;
+                                let _ = update_tx
+                                    .send(AgentUpdate::AgentReply(format!(
+                                        "❌ Failed to observe UI: {}",
+                                        e
+                                    )))
+                                    .await;
+                                break;
+                            }
+                        };
+
+                        let compressed = compress_xml(&raw_xml);
+                        info!("Compressed UI: {} chars", compressed.len());
+
+                        // ============================================
+                        // 2. THINK — ask the LLM for the next action
+                        // ============================================
+                        let _ = update_tx
+                            .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
+                            .await;
+
+                        let action = match llm.think(&compressed, &goal).await {
+                            Ok(a) => a,
+                            Err(e) => {
+                                error!("LLM think failed: {}", e);
+                                let _ = update_tx
+                                    .send(AgentUpdate::StatusChanged(AgentStatus::Error(
+                                        e.to_string(),
+                                    )))
+                                    .await;
+                                let _ = update_tx
+                                    .send(AgentUpdate::AgentReply(format!(
+                                        "❌ LLM error: {}",
+                                        e
+                                    )))
+                                    .await;
+                                break;
+                            }
+                        };
+
+                        info!("Action decided: {}", action);
+                        let _ = update_tx
+                            .send(AgentUpdate::AgentReply(format!(
+                                "🤖 Step {}: {}",
+                                iteration, action
+                            )))
+                            .await;
+
+                        // ============================================
+                        // 3. CHECK FOR DONE
+                        // ============================================
+                        if let Action::Done { success, reason } = &action {
+                            let emoji = if *success { "✅" } else { "❌" };
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(format!(
+                                    "{} Goal completed: {}",
+                                    emoji, reason
+                                )))
+                                .await;
+                            break;
                         }
-                    };
 
-                    // --- Act (stub) ---
-                    status = AgentStatus::Acting;
-                    let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
-                    info!("Agent decided: {}", response);
+                        // ============================================
+                        // 4. ACT — execute the action via ADB
+                        // ============================================
+                        let _ = update_tx
+                            .send(AgentUpdate::StatusChanged(AgentStatus::Acting))
+                            .await;
 
-                    // Report response back to UI
-                    let _ = update_tx.send(AgentUpdate::AgentReply(response)).await;
+                        if let Err(e) = device.execute_action(&action).await {
+                            error!("Action execution failed: {}", e);
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(format!(
+                                    "⚠️ Action failed: {} — retrying...",
+                                    e
+                                )))
+                                .await;
+                            // Don't break — let the agent observe again and try something else
+                        }
 
-                    // --- Return to Idle ---
-                    status = AgentStatus::Idle;
-                    let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
-                    info!("Goal processing complete. Returned to {:?}", status);
+                        // Small delay to let the device UI settle
+                        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    }
+
+                    // Return to idle after goal completes
+                    let _ = update_tx
+                        .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
+                        .await;
+                    info!("Goal processing complete. Returned to Idle.");
                 }
                 AgentMessage::Stop => {
                     info!("Stopping Agent Engine.");
-                    status = AgentStatus::Idle;
-                    let _ = update_tx.send(AgentUpdate::StatusChanged(status.clone())).await;
+                    let _ = update_tx
+                        .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
+                        .await;
                     break;
                 }
             }
