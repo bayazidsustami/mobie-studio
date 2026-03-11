@@ -4,8 +4,10 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::agent::action::Action;
+use crate::config::AppConfig;
 use crate::device::{compress_xml, DeviceBridge};
 use crate::llm::{LlmClient, LlmConfig};
+use crate::yaml_exporter::{export, TestCase, TestStep};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -24,6 +26,10 @@ pub enum AgentStatus {
 pub enum AgentMessage {
     StartGoal(String),
     Stop,
+    /// Update LLM configuration (API key, model, etc.) at runtime.
+    UpdateConfig(LlmConfig),
+    /// Select a specific ADB device by serial ID.
+    SelectDevice(String),
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -31,6 +37,8 @@ pub enum AgentMessage {
 pub enum AgentUpdate {
     StatusChanged(AgentStatus),
     AgentReply(String),
+    /// Refreshed list of connected ADB device IDs.
+    DeviceList(Vec<String>),
 }
 
 /// Maximum iterations per goal to prevent infinite loops.
@@ -46,37 +54,70 @@ pub struct AgentEngine {
 
 impl AgentEngine {
     /// Spawn the agent loop on the GPUI background executor.
-    ///
-    /// Returns the `AgentEngine` (for sending commands) and an
-    /// `mpsc::Receiver<AgentUpdate>` the UI should poll for updates.
     pub fn start(
         _update_tx: mpsc::Sender<AgentUpdate>,
+        _initial_config: AppConfig,
     ) -> (Self, mpsc::Receiver<AgentMessage>) {
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
         (Self { sender: cmd_tx }, cmd_rx)
     }
 
-    /// The core agent loop.  Runs inside a background task.
-    ///
-    /// For each goal the loop executes:
-    ///   1. **Observe** — dump the UI tree via ADB and compress it.
-    ///   2. **Think**   — send the compressed XML + goal to the LLM.
-    ///   3. **Act**     — execute the decided action via ADB.
-    ///   4. **Repeat**  — unless the action is `Done` or max iterations hit.
+    /// The core agent loop. Runs inside a background task.
     pub async fn run_loop(
         mut cmd_rx: mpsc::Receiver<AgentMessage>,
         update_tx: mpsc::Sender<AgentUpdate>,
     ) {
-        let device = DeviceBridge::new();
-        let llm = LlmClient::new(LlmConfig::default());
+        // Load persisted config on startup (or could receive via channel from main)
+        let app_config = crate::config::load_config();
+        let mut device = DeviceBridge::new();
+        let mut llm = LlmClient::new(app_config.llm.clone());
 
         info!("Agent Engine started. Waiting for goals...");
         let _ = update_tx
             .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
             .await;
 
+        // Perform an initial device list refresh
+        Self::refresh_devices(&device, &update_tx).await;
+
         while let Some(msg) = cmd_rx.recv().await {
             match msg {
+                // ----------------------------------------------------------------
+                // Config / device management messages
+                // ----------------------------------------------------------------
+                AgentMessage::UpdateConfig(new_cfg) => {
+                    info!("Config updated: model={}", new_cfg.model);
+                    llm = LlmClient::new(new_cfg);
+                }
+                AgentMessage::SelectDevice(id) => {
+                    info!("Device selected: {}", id);
+                    device.select_device(id.clone());
+                    let _ = update_tx
+                        .send(AgentUpdate::AgentReply(format!(
+                            "📱 Device selected: {}",
+                            id
+                        )))
+                        .await;
+                }
+
+                // ----------------------------------------------------------------
+                // Stop
+                // ----------------------------------------------------------------
+                AgentMessage::Stop => {
+                    info!("Stopping Agent Engine.");
+                    let _ = update_tx
+                        .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
+                        .await;
+                    let _ = update_tx
+                        .send(AgentUpdate::AgentReply(
+                            "⏹ Goal cancelled.".to_string(),
+                        ))
+                        .await;
+                }
+
+                // ----------------------------------------------------------------
+                // StartGoal — the main agent loop
+                // ----------------------------------------------------------------
                 AgentMessage::StartGoal(goal) => {
                     info!("Received new goal: {}", goal);
                     let _ = update_tx
@@ -86,9 +127,12 @@ impl AgentEngine {
                         )))
                         .await;
 
+                    // Accumulate steps for YAML export
+                    let mut recorded_steps: Vec<TestStep> = Vec::new();
                     let mut iteration = 0usize;
+                    let mut goal_success = false;
 
-                    loop {
+                    'agent_loop: loop {
                         iteration += 1;
                         if iteration > MAX_ITERATIONS {
                             warn!("Max iterations ({}) reached for goal", MAX_ITERATIONS);
@@ -103,9 +147,7 @@ impl AgentEngine {
 
                         info!("--- Iteration {}/{} ---", iteration, MAX_ITERATIONS);
 
-                        // ============================================
-                        // 1. OBSERVE — dump and compress the UI tree
-                        // ============================================
+                        // 1. OBSERVE
                         let _ = update_tx
                             .send(AgentUpdate::StatusChanged(AgentStatus::Observing))
                             .await;
@@ -132,9 +174,15 @@ impl AgentEngine {
                         let compressed = compress_xml(&raw_xml);
                         info!("Compressed UI: {} chars", compressed.len());
 
-                        // ============================================
-                        // 2. THINK — ask the LLM for the next action
-                        // ============================================
+                        // Check if a Stop was sent during observe
+                        if let Ok(AgentMessage::Stop) = cmd_rx.try_recv() {
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply("⏹ Goal cancelled.".to_string()))
+                                .await;
+                            break 'agent_loop;
+                        }
+
+                        // 2. THINK
                         let _ = update_tx
                             .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                             .await;
@@ -166,9 +214,7 @@ impl AgentEngine {
                             )))
                             .await;
 
-                        // ============================================
-                        // 3. CHECK FOR DONE
-                        // ============================================
+                        // 3. DONE check
                         if let Action::Done { success, reason } = &action {
                             let emoji = if *success { "✅" } else { "❌" };
                             let _ = update_tx
@@ -177,12 +223,15 @@ impl AgentEngine {
                                     emoji, reason
                                 )))
                                 .await;
+                            goal_success = *success;
                             break;
                         }
 
-                        // ============================================
-                        // 4. ACT — execute the action via ADB
-                        // ============================================
+                        // Record this step
+                        let step = action_to_test_step(&action);
+                        recorded_steps.push(step);
+
+                        // 4. ACT
                         let _ = update_tx
                             .send(AgentUpdate::StatusChanged(AgentStatus::Acting))
                             .await;
@@ -195,27 +244,114 @@ impl AgentEngine {
                                     e
                                 )))
                                 .await;
-                            // Don't break — let the agent observe again and try something else
                         }
 
-                        // Small delay to let the device UI settle
+                        // Wait for device UI to settle
                         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                     }
 
-                    // Return to idle after goal completes
+                    // YAML export on success
+                    if goal_success && !recorded_steps.is_empty() {
+                        let test_case = TestCase {
+                            goal: goal.clone(),
+                            steps: recorded_steps,
+                            success: true,
+                        };
+                        match export(&test_case) {
+                            Ok(path) => {
+                                let _ = update_tx
+                                    .send(AgentUpdate::AgentReply(format!(
+                                        "📄 Test case exported: {}",
+                                        path.display()
+                                    )))
+                                    .await;
+                            }
+                            Err(e) => {
+                                warn!("YAML export failed: {}", e);
+                                let _ = update_tx
+                                    .send(AgentUpdate::AgentReply(format!(
+                                        "⚠️ YAML export failed: {}",
+                                        e
+                                    )))
+                                    .await;
+                            }
+                        }
+                    }
+
+                    // Return to idle
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
                     info!("Goal processing complete. Returned to Idle.");
                 }
-                AgentMessage::Stop => {
-                    info!("Stopping Agent Engine.");
-                    let _ = update_tx
-                        .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
-                        .await;
-                    break;
-                }
             }
         }
+    }
+
+    /// Refresh the ADB device list and push it to the UI.
+    async fn refresh_devices(device: &DeviceBridge, update_tx: &mpsc::Sender<AgentUpdate>) {
+        match device.list_devices().await {
+            Ok(devices) => {
+                info!("Found {} device(s)", devices.len());
+                let _ = update_tx.send(AgentUpdate::DeviceList(devices)).await;
+            }
+            Err(e) => {
+                warn!("Failed to list ADB devices: {}", e);
+                let _ = update_tx.send(AgentUpdate::DeviceList(vec![])).await;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Convert an `Action` into a `TestStep` for YAML recording.
+fn action_to_test_step(action: &Action) -> TestStep {
+    use serde_json::json;
+    let (action_name, params, reasoning) = match action {
+        Action::Tap { x, y, reasoning } => {
+            let mut p = std::collections::HashMap::new();
+            p.insert("x".to_string(), json!(x));
+            p.insert("y".to_string(), json!(y));
+            ("tap", p, reasoning.clone())
+        }
+        Action::Input { text, reasoning } => {
+            let mut p = std::collections::HashMap::new();
+            p.insert("text".to_string(), json!(text));
+            ("input", p, reasoning.clone())
+        }
+        Action::Swipe {
+            direction,
+            x,
+            y,
+            reasoning,
+        } => {
+            let mut p = std::collections::HashMap::new();
+            p.insert(
+                "direction".to_string(),
+                json!(format!("{:?}", direction).to_lowercase()),
+            );
+            p.insert("x".to_string(), json!(x));
+            p.insert("y".to_string(), json!(y));
+            ("swipe", p, reasoning.clone())
+        }
+        Action::KeyEvent { code, reasoning } => {
+            let mut p = std::collections::HashMap::new();
+            p.insert("code".to_string(), json!(code));
+            ("key_event", p, reasoning.clone())
+        }
+        Action::Done { .. } => (
+            "done",
+            std::collections::HashMap::new(),
+            String::new(),
+        ),
+    };
+
+    TestStep {
+        action: action_name.to_string(),
+        params,
+        reasoning,
     }
 }

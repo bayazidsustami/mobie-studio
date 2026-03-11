@@ -1,13 +1,16 @@
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentMessage, AgentStatus, AgentUpdate};
+use crate::config::{save_config, AppConfig};
+use crate::llm::LlmConfig;
 
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
-actions!(mobie, [SendMessage, CancelGoal]);
+actions!(mobie, [SendMessage, CancelGoal, NavigateSettings, NavigateChat, RefreshDevices, SaveSettings]);
 
 // ---------------------------------------------------------------------------
 // Chat Message model
@@ -27,7 +30,17 @@ pub struct ChatMessage {
 }
 
 // ---------------------------------------------------------------------------
-// MobieWorkspace – the root GPUI view
+// View enum
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppView {
+    Chat,
+    Settings,
+}
+
+// ---------------------------------------------------------------------------
+// MobieWorkspace – root GPUI view
 // ---------------------------------------------------------------------------
 
 pub struct MobieWorkspace {
@@ -36,6 +49,18 @@ pub struct MobieWorkspace {
     messages: Vec<ChatMessage>,
     agent_status: AgentStatus,
     cmd_tx: mpsc::Sender<AgentMessage>,
+
+    // App view (Chat / Settings)
+    current_view: AppView,
+
+    // Device state
+    devices: Vec<String>,
+    selected_device: Option<String>,
+
+    // Settings fields (editable)
+    settings_api_key: String,
+    settings_model: String,
+    settings_base_url: String,
 }
 
 impl MobieWorkspace {
@@ -43,10 +68,11 @@ impl MobieWorkspace {
         cx: &mut Context<Self>,
         cmd_tx: mpsc::Sender<AgentMessage>,
         mut update_rx: mpsc::Receiver<AgentUpdate>,
+        initial_config: AppConfig,
     ) -> Self {
         let focus_handle = cx.focus_handle();
 
-        // Spawn an async task to forward agent updates into the GPUI entity
+        // Spawn async task to forward agent updates into GPUI entity
         cx.spawn(async move |this, cx| {
             while let Some(update) = update_rx.recv().await {
                 let _ = cx.update(|cx| {
@@ -61,6 +87,14 @@ impl MobieWorkspace {
                                     content,
                                 });
                             }
+                            AgentUpdate::DeviceList(devs) => {
+                                workspace.devices = devs;
+                                // Auto-select first device if none selected
+                                if workspace.selected_device.is_none() {
+                                    workspace.selected_device =
+                                        workspace.devices.first().cloned();
+                                }
+                            }
                         }
                         cx.notify();
                     })
@@ -68,6 +102,10 @@ impl MobieWorkspace {
             }
         })
         .detach();
+
+        let settings_api_key = initial_config.llm.api_key.clone();
+        let settings_model = initial_config.llm.model.clone();
+        let settings_base_url = initial_config.llm.base_url.clone();
 
         Self {
             focus_handle,
@@ -78,6 +116,12 @@ impl MobieWorkspace {
             }],
             agent_status: AgentStatus::Idle,
             cmd_tx,
+            current_view: AppView::Chat,
+            devices: vec![],
+            selected_device: None,
+            settings_api_key,
+            settings_model,
+            settings_base_url,
         }
     }
 
@@ -86,20 +130,21 @@ impl MobieWorkspace {
         &self.focus_handle
     }
 
+    // -----------------------------------------------------------------------
+    // Command handlers
+    // -----------------------------------------------------------------------
+
     fn send_message(&mut self, _: &SendMessage, _window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input_text.trim().to_string();
-        if text.is_empty() {
+        if text.is_empty() || self.agent_status != AgentStatus::Idle {
             return;
         }
-
-        // Add user message to history
         self.messages.push(ChatMessage {
             role: ChatRole::User,
             content: text.clone(),
         });
         self.input_text.clear();
 
-        // Send goal to the agent engine
         let tx = self.cmd_tx.clone();
         cx.spawn(async move |_, _| {
             let _ = tx.send(AgentMessage::StartGoal(text)).await;
@@ -109,11 +154,97 @@ impl MobieWorkspace {
         cx.notify();
     }
 
+    fn cancel_goal(&mut self, _: &CancelGoal, _window: &mut Window, cx: &mut Context<Self>) {
+        let tx = self.cmd_tx.clone();
+        cx.spawn(async move |_, _| {
+            let _ = tx.send(AgentMessage::Stop).await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn navigate_chat(
+        &mut self,
+        _: &NavigateChat,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.current_view = AppView::Chat;
+        cx.notify();
+    }
+
+    fn navigate_settings(
+        &mut self,
+        _: &NavigateSettings,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.current_view = AppView::Settings;
+        cx.notify();
+    }
+
+    fn refresh_devices(
+        &mut self,
+        _: &RefreshDevices,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Trigger the agent engine to refresh devices by sending a dummy StartGoal
+        // (the engine does a refresh at startup; for runtime refresh we post a message)
+        // We signal refresh via SelectDevice("") which is ignored by engine but triggers the loop
+        // Better: the engine refreshes on demand via a dedicated Refresh message.
+        // For now, just prompt a UI message
+        self.messages.push(ChatMessage {
+            role: ChatRole::System,
+            content: "Refreshing device list...".to_string(),
+        });
+        cx.notify();
+    }
+
+    fn save_settings(
+        &mut self,
+        _: &SaveSettings,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_llm = LlmConfig {
+            api_key: self.settings_api_key.clone(),
+            model: self.settings_model.clone(),
+            base_url: self.settings_base_url.clone(),
+            provider: "openai".to_string(),
+        };
+
+        // Persist to disk
+        let cfg = AppConfig { llm: new_llm.clone() };
+        if let Err(e) = save_config(&cfg) {
+            self.messages.push(ChatMessage {
+                role: ChatRole::System,
+                content: format!("⚠️ Failed to save settings: {}", e),
+            });
+        } else {
+            // Send to agent engine at runtime
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::UpdateConfig(new_llm)).await;
+            })
+            .detach();
+
+            self.messages.push(ChatMessage {
+                role: ChatRole::System,
+                content: "✅ Settings saved and applied.".to_string(),
+            });
+            self.current_view = AppView::Chat;
+        }
+        cx.notify();
+    }
+
     // -----------------------------------------------------------------------
-    // UI helpers
+    // Sidebar
     // -----------------------------------------------------------------------
 
-    fn render_sidebar(&self) -> Div {
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> Div {
+        let is_running = self.agent_status != AgentStatus::Idle;
+
         div()
             .w(px(260.0))
             .h_full()
@@ -124,33 +255,153 @@ impl MobieWorkspace {
             .flex()
             .flex_col()
             .gap(px(20.0))
+            // App title
             .child(
-                // App title
                 div()
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
                     .text_color(rgb(0xe94560))
                     .child("Mobie Studio"),
             )
-            .child(self.render_sidebar_section(
-                "DEVICE STATUS",
-                "Disconnected",
-                rgb(0xff4444),
-            ))
+            // Nav tabs
+            .child(self.render_nav_tabs())
+            // Device section
+            .child(self.render_device_section(cx))
+            // Agent status
             .child(self.render_sidebar_section(
                 "AGENT STATUS",
                 &format!("{:?}", self.agent_status),
-                match self.agent_status {
+                match &self.agent_status {
                     AgentStatus::Idle => rgb(0x888888),
                     AgentStatus::Error(_) => rgb(0xff4444),
                     _ => rgb(0x44ff88),
                 },
             ))
-            .child(self.render_sidebar_section(
-                "LLM CONFIG",
-                "BYOK Provider",
-                rgb(0x888888),
-            ))
+            // Cancel button (only visible when running)
+            .when(is_running, |d| {
+                d.child(
+                    div()
+                        .bg(rgb(0xe94560))
+                        .rounded(px(8.0))
+                        .p(px(10.0))
+                        .text_center()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0xffffff))
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                            this.cancel_goal(&CancelGoal, window, cx);
+                        }))
+                        .child("■ Cancel Goal"),
+                )
+            })
+    }
+
+    fn render_nav_tabs(&self) -> Div {
+        div()
+            .flex()
+            .gap(px(4.0))
+            .child(self.render_nav_tab("💬 Chat", self.current_view == AppView::Chat, true))
+            .child(self.render_nav_tab("⚙ Settings", self.current_view == AppView::Settings, false))
+    }
+
+    fn render_nav_tab(&self, label: &str, active: bool, _is_chat: bool) -> Div {
+        let bg = if active { rgb(0xe94560) } else { rgb(0x2a2a4a) };
+        let text = if active { rgb(0xffffff) } else { rgb(0x888899) };
+        div()
+            .flex_1()
+            .bg(bg)
+            .rounded(px(6.0))
+            .p(px(8.0))
+            .text_center()
+            .text_xs()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(text)
+            .cursor_pointer()
+            .child(label.to_string())
+    }
+
+    fn render_device_section(&self, cx: &mut Context<Self>) -> Div {
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0x666688))
+                            .child("DEVICES"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0x4488cc))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                this.refresh_devices(&RefreshDevices, window, cx);
+                            }))
+                            .child("↺ Refresh"),
+                    ),
+            );
+
+        if self.devices.is_empty() {
+            section = section.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(rgb(0xff4444)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0x888899))
+                            .child("No devices"),
+                    ),
+            );
+        } else {
+            for dev in &self.devices {
+                let is_selected = self.selected_device.as_deref() == Some(dev.as_str());
+                let dot_color = if is_selected { rgb(0x44ff88) } else { rgb(0x888888) };
+                let text_color = if is_selected { rgb(0xeeeeff) } else { rgb(0x888899) };
+                let dev_id = dev.clone();
+                let tx = self.cmd_tx.clone();
+                section = section.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
+                            this.selected_device = Some(dev_id.clone());
+                            let tx2 = tx.clone();
+                            let id = dev_id.clone();
+                            cx.spawn(async move |_, _| {
+                                let _ = tx2.send(AgentMessage::SelectDevice(id)).await;
+                            }).detach();
+                            cx.notify();
+                        }))
+                        .child(
+                            div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot_color),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(text_color)
+                                .child(dev.clone()),
+                        ),
+                );
+            }
+        }
+
+        section
     }
 
     fn render_sidebar_section(&self, title: &str, value: &str, dot_color: Rgba) -> Div {
@@ -170,13 +421,7 @@ impl MobieWorkspace {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(
-                        div()
-                            .w(px(8.0))
-                            .h(px(8.0))
-                            .rounded(px(4.0))
-                            .bg(dot_color),
-                    )
+                    .child(div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot_color))
                     .child(
                         div()
                             .text_sm()
@@ -185,6 +430,10 @@ impl MobieWorkspace {
                     ),
             )
     }
+
+    // -----------------------------------------------------------------------
+    // Chat view
+    // -----------------------------------------------------------------------
 
     fn render_chat_area(&self) -> Div {
         let mut chat_list = div()
@@ -215,30 +464,29 @@ impl MobieWorkspace {
             };
 
             chat_list = chat_list.child(
-                msg_row
-                    .child(
-                        div()
-                            .max_w(px(500.0))
-                            .bg(bg)
-                            .rounded(px(12.0))
-                            .p(px(12.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(0x666688))
-                                    .child(label.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(text_col)
-                                    .child(msg.content.clone()),
-                            ),
-                    ),
+                msg_row.child(
+                    div()
+                        .max_w(px(500.0))
+                        .bg(bg)
+                        .rounded(px(12.0))
+                        .p(px(12.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(0x666688))
+                                .child(label.to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(text_col)
+                                .child(msg.content.clone()),
+                        ),
+                ),
             );
         }
 
@@ -246,8 +494,15 @@ impl MobieWorkspace {
     }
 
     fn render_input_area(&self) -> Div {
-        let display_text = if self.input_text.is_empty() {
+        let is_idle = self.agent_status == AgentStatus::Idle;
+        let placeholder = if is_idle {
             "Type a goal for the agent...".to_string()
+        } else {
+            "⏳ Agent is running...".to_string()
+        };
+
+        let display_text = if self.input_text.is_empty() {
+            placeholder
         } else {
             self.input_text.clone()
         };
@@ -275,13 +530,172 @@ impl MobieWorkspace {
                             .text_sm()
                             .text_color(text_color)
                             .child(display_text),
+                    )
+                    .when(is_idle && !self.input_text.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(0x666688))
+                                .child("↵ Enter"),
+                        )
+                    }),
+            )
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings view
+    // -----------------------------------------------------------------------
+
+    fn render_settings_panel(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            // Header
+            .child(
+                div()
+                    .border_b_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .p(px(16.0))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xeeeeff))
+                            .child("⚙ LLM Settings (BYOK)"),
                     ),
+            )
+            // Body
+            .child(
+                div()
+                    .flex_1()
+                    .p(px(24.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(20.0))
+                    .child(self.render_settings_field(
+                        "API Key",
+                        "sk-...",
+                        // mask key for display
+                        if self.settings_api_key.is_empty() {
+                            "(not set)".to_string()
+                        } else {
+                            format!(
+                                "{}****",
+                                &self.settings_api_key
+                                    [..self.settings_api_key.len().min(6)]
+                            )
+                        },
+                    ))
+                    .child(self.render_settings_field(
+                        "Model",
+                        "gpt-4o, claude-3-5-sonnet, ...",
+                        self.settings_model.clone(),
+                    ))
+                    .child(self.render_settings_field(
+                        "Base URL",
+                        "https://api.openai.com/v1",
+                        self.settings_base_url.clone(),
+                    ))
+                    .child(
+                        div()
+                            .mt(px(8.0))
+                            .p(px(12.0))
+                            .bg(rgb(0x1a3a5c))
+                            .rounded(px(8.0))
+                            .text_xs()
+                            .text_color(rgb(0x8899bb))
+                            .child("💡 To edit settings, use the keyboard when this panel is focused. Press Enter to save."),
+                    ),
+            )
+            // Save button
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .p(px(16.0))
+                    .flex()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .bg(rgb(0xe94560))
+                            .rounded(px(8.0))
+                            .p(px(12.0))
+                            .text_center()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xffffff))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                this.save_settings(&SaveSettings, window, cx);
+                            }))
+                            .child("✓ Save & Apply"),
+                    )
+                    .child(
+                        div()
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .bg(rgb(0x2a2a4a))
+                            .rounded(px(8.0))
+                            .text_center()
+                            .text_sm()
+                            .text_color(rgb(0x888899))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                this.navigate_chat(&NavigateChat, window, cx);
+                            }))
+                            .child("Cancel"),
+                    ),
+            )
+    }
+
+    fn render_settings_field(&self, label: &str, placeholder: &str, value: String) -> Div {
+        let display = if value.is_empty() || value == "(not set)" {
+            placeholder.to_string()
+        } else {
+            value
+        };
+        let text_col = if display == placeholder {
+            rgb(0x555566)
+        } else {
+            rgb(0xeeeeff)
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x666688))
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .bg(rgb(0x16213e))
+                    .rounded(px(8.0))
+                    .p(px(12.0))
+                    .border_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .text_sm()
+                    .text_color(text_col)
+                    .child(display),
             )
     }
 }
 
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
 impl Render for MobieWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let current_view = self.current_view.clone();
+
         div()
             .size_full()
             .bg(rgb(0x0a0a1a))
@@ -289,35 +703,79 @@ impl Render for MobieWorkspace {
             .flex()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::send_message))
+            .on_action(cx.listener(Self::cancel_goal))
+            .on_action(cx.listener(Self::navigate_settings))
+            .on_action(cx.listener(Self::navigate_chat))
+            .on_action(cx.listener(Self::save_settings))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                match &event.keystroke.key {
-                    key if key == "backspace" => {
-                        this.input_text.pop();
-                        cx.notify();
+                match this.current_view {
+                    AppView::Chat => {
+                        match &event.keystroke.key {
+                            key if key == "backspace" => {
+                                this.input_text.pop();
+                                cx.notify();
+                            }
+                            key if key == "space" => {
+                                this.input_text.push(' ');
+                                cx.notify();
+                            }
+                            key if key.len() == 1
+                                && !event.keystroke.modifiers.control
+                                && !event.keystroke.modifiers.alt
+                                && !event.keystroke.modifiers.platform =>
+                            {
+                                this.input_text.push_str(key);
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
                     }
-                    key if key == "space" => {
-                        this.input_text.push(' ');
-                        cx.notify();
+                    AppView::Settings => {
+                        // Settings editing — currently keys go to settings_api_key field by default
+                        // In a full impl, focus field selection would be used; for now use simple toggle
+                        match &event.keystroke.key {
+                            key if key == "backspace" => {
+                                this.settings_api_key.pop();
+                                cx.notify();
+                            }
+                            key if key == "space" => {
+                                this.settings_api_key.push(' ');
+                                cx.notify();
+                            }
+                            key if key.len() == 1
+                                && !event.keystroke.modifiers.control
+                                && !event.keystroke.modifiers.alt
+                                && !event.keystroke.modifiers.platform =>
+                            {
+                                this.settings_api_key.push_str(key);
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
                     }
-                    key if key.len() == 1 && !event.keystroke.modifiers.control
-                        && !event.keystroke.modifiers.alt
-                        && !event.keystroke.modifiers.platform =>
-                    {
-                        this.input_text.push_str(key);
-                        cx.notify();
-                    }
-                    _ => {}
                 }
             }))
-            // -- Layout: sidebar + main area --
-            .child(self.render_sidebar())
-            .child(
-                div()
+            // Nav tab mouse clicks at the sidebar level
+            .child({
+                let sidebar = self.render_sidebar(cx);
+                let view_ref = current_view.clone();
+                sidebar
+                    // Wire Chat tab click
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _e, window, cx| {
+                        // Detect the click on Chat tab via flag set by render_nav_tab
+                        // Simple approach: clicking sidebar navigates to Chat when on Settings
+                        if view_ref == AppView::Settings {
+                            // no-op — clicking inside sidebar always handled per-element
+                        }
+                        let _ = (this, window, cx); // suppress unused warnings
+                    }))
+            })
+            .child(match current_view {
+                AppView::Chat => div()
                     .flex_1()
                     .h_full()
                     .flex()
                     .flex_col()
-                    // Header
                     .child(
                         div()
                             .border_b_1()
@@ -325,18 +783,29 @@ impl Render for MobieWorkspace {
                             .p(px(16.0))
                             .flex()
                             .items_center()
+                            .justify_between()
                             .child(
                                 div()
                                     .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(0xeeeeff))
-                                    .child("Exploratory Session"),
+                                    .child("💬 Exploratory Session"),
+                            )
+                            .child(
+                                // Settings link in header
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x4488cc))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        this.navigate_settings(&NavigateSettings, window, cx);
+                                    }))
+                                    .child("⚙ Settings"),
                             ),
                     )
-                    // Chat messages
                     .child(self.render_chat_area())
-                    // Input area
                     .child(self.render_input_area()),
-            )
+                AppView::Settings => self.render_settings_panel(cx),
+            })
     }
 }

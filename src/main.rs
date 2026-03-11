@@ -1,24 +1,33 @@
 pub mod agent;
+pub mod config;
 pub mod device;
 pub mod llm;
 pub mod ui;
+pub mod yaml_exporter;
 
 use gpui::*;
 use tracing::info;
 
 use crate::agent::AgentEngine;
-use crate::ui::{MobieWorkspace, SendMessage};
+use crate::config::load_config;
+use crate::ui::{MobieWorkspace, CancelGoal, SendMessage};
 
 fn main() {
     // Initialize structured logging
     tracing_subscriber::fmt::init();
     info!("Starting Mobie Studio...");
 
-    Application::new().run(|app| {
+    // Load persisted config (or default)
+    let initial_config = load_config();
+
+    Application::new().run(move |app| {
         // Bind key actions
         app.bind_keys([
             KeyBinding::new("enter", SendMessage, None),
+            KeyBinding::new("escape", CancelGoal, None),
         ]);
+
+        let config_for_window = initial_config.clone();
 
         app.open_window(
             WindowOptions {
@@ -29,19 +38,20 @@ fn main() {
                 ))),
                 ..Default::default()
             },
-            |window, app| {
+            move |window, app| {
                 // Create channels for agent ↔ UI communication
                 let (update_tx, update_rx) = tokio::sync::mpsc::channel(64);
-                let (engine, cmd_rx) = AgentEngine::start(update_tx.clone());
+                let (engine, cmd_rx) =
+                    AgentEngine::start(update_tx.clone(), config_for_window.clone());
 
                 // Spawn the agent loop in the background
                 app.background_executor()
                     .spawn(AgentEngine::run_loop(cmd_rx, update_tx))
                     .detach();
 
-                // Focus the window for keyboard input
+                // Build and focus the root workspace view
                 let entity = app.new(|cx| {
-                    MobieWorkspace::new(cx, engine.sender, update_rx)
+                    MobieWorkspace::new(cx, engine.sender, update_rx, config_for_window.clone())
                 });
 
                 let focus_handle = entity.read(app).focus_handle().clone();
