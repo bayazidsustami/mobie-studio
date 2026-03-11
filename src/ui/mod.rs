@@ -39,6 +39,13 @@ pub enum AppView {
     Settings,
 }
 
+/// Used by nav tab click handlers to dispatch the correct navigation action
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NavTabAction {
+    Chat,
+    Settings,
+}
+
 // ---------------------------------------------------------------------------
 // MobieWorkspace – root GPUI view
 // ---------------------------------------------------------------------------
@@ -264,7 +271,7 @@ impl MobieWorkspace {
                     .child("Mobie Studio"),
             )
             // Nav tabs
-            .child(self.render_nav_tabs())
+            .child(self.render_nav_tabs(cx))
             // Device section
             .child(self.render_device_section(cx))
             // Agent status
@@ -297,15 +304,16 @@ impl MobieWorkspace {
             })
     }
 
-    fn render_nav_tabs(&self) -> Div {
+    fn render_nav_tabs(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
             .gap(px(4.0))
-            .child(self.render_nav_tab("💬 Chat", self.current_view == AppView::Chat, true))
-            .child(self.render_nav_tab("⚙ Settings", self.current_view == AppView::Settings, false))
+            .child(self.render_nav_tab("💬 Chat", self.current_view == AppView::Chat, cx, NavTabAction::Chat))
+            .child(self.render_nav_tab("⚙ Settings", self.current_view == AppView::Settings, cx, NavTabAction::Settings))
     }
 
-    fn render_nav_tab(&self, label: &str, active: bool, _is_chat: bool) -> Div {
+
+    fn render_nav_tab(&self, label: &str, active: bool, cx: &mut Context<Self>, action: NavTabAction) -> Div {
         let bg = if active { rgb(0xe94560) } else { rgb(0x2a2a4a) };
         let text = if active { rgb(0xffffff) } else { rgb(0x888899) };
         div()
@@ -318,6 +326,12 @@ impl MobieWorkspace {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(text)
             .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                match action {
+                    NavTabAction::Chat => this.navigate_chat(&NavigateChat, window, cx),
+                    NavTabAction::Settings => this.navigate_settings(&NavigateSettings, window, cx),
+                }
+            }))
             .child(label.to_string())
     }
 
@@ -707,69 +721,42 @@ impl Render for MobieWorkspace {
             .on_action(cx.listener(Self::navigate_settings))
             .on_action(cx.listener(Self::navigate_chat))
             .on_action(cx.listener(Self::save_settings))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // Skip events consumed by modifier-only chords (ctrl/alt/cmd)
+                if event.keystroke.modifiers.control
+                    || event.keystroke.modifiers.alt
+                    || event.keystroke.modifiers.platform
+                {
+                    return;
+                }
+                let key = &event.keystroke.key;
+                // key_char is the actual character produced by the key + modifiers
+                // (e.g. "A" for shift-a, "ß" for option-s). Falls back to key for
+                // special keys like "backspace" that have no char.
+                let key_char = event.keystroke.key_char.as_deref();
+
                 match this.current_view {
                     AppView::Chat => {
-                        match &event.keystroke.key {
-                            key if key == "backspace" => {
-                                this.input_text.pop();
-                                cx.notify();
-                            }
-                            key if key == "space" => {
-                                this.input_text.push(' ');
-                                cx.notify();
-                            }
-                            key if key.len() == 1
-                                && !event.keystroke.modifiers.control
-                                && !event.keystroke.modifiers.alt
-                                && !event.keystroke.modifiers.platform =>
-                            {
-                                this.input_text.push_str(key);
-                                cx.notify();
-                            }
-                            _ => {}
+                        if key == "backspace" {
+                            this.input_text.pop();
+                            cx.notify();
+                        } else if let Some(ch) = key_char {
+                            this.input_text.push_str(ch);
+                            cx.notify();
                         }
                     }
                     AppView::Settings => {
-                        // Settings editing — currently keys go to settings_api_key field by default
-                        // In a full impl, focus field selection would be used; for now use simple toggle
-                        match &event.keystroke.key {
-                            key if key == "backspace" => {
-                                this.settings_api_key.pop();
-                                cx.notify();
-                            }
-                            key if key == "space" => {
-                                this.settings_api_key.push(' ');
-                                cx.notify();
-                            }
-                            key if key.len() == 1
-                                && !event.keystroke.modifiers.control
-                                && !event.keystroke.modifiers.alt
-                                && !event.keystroke.modifiers.platform =>
-                            {
-                                this.settings_api_key.push_str(key);
-                                cx.notify();
-                            }
-                            _ => {}
+                        if key == "backspace" {
+                            this.settings_api_key.pop();
+                            cx.notify();
+                        } else if let Some(ch) = key_char {
+                            this.settings_api_key.push_str(ch);
+                            cx.notify();
                         }
                     }
                 }
             }))
-            // Nav tab mouse clicks at the sidebar level
-            .child({
-                let sidebar = self.render_sidebar(cx);
-                let view_ref = current_view.clone();
-                sidebar
-                    // Wire Chat tab click
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _e, window, cx| {
-                        // Detect the click on Chat tab via flag set by render_nav_tab
-                        // Simple approach: clicking sidebar navigates to Chat when on Settings
-                        if view_ref == AppView::Settings {
-                            // no-op — clicking inside sidebar always handled per-element
-                        }
-                        let _ = (this, window, cx); // suppress unused warnings
-                    }))
-            })
+            .child(self.render_sidebar(cx))
             .child(match current_view {
                 AppView::Chat => div()
                     .flex_1()

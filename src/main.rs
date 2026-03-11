@@ -44,10 +44,15 @@ fn main() {
                 let (engine, cmd_rx) =
                     AgentEngine::start(update_tx.clone(), config_for_window.clone());
 
-                // Spawn the agent loop in the background
-                app.background_executor()
-                    .spawn(AgentEngine::run_loop(cmd_rx, update_tx))
-                    .detach();
+                // Spawn the agent loop on a dedicated OS thread with its own Tokio runtime.
+                // GPUI's background_executor has no Tokio reactor, so tokio APIs would panic there.
+                std::thread::spawn(move || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to build Tokio runtime for agent")
+                        .block_on(AgentEngine::run_loop(cmd_rx, update_tx))
+                });
 
                 // Build and focus the root workspace view
                 let entity = app.new(|cx| {
