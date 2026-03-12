@@ -948,16 +948,17 @@ impl MobieWorkspace {
     fn render_chat_area(&self) -> Div {
         div()
             .flex_1()
+            .min_h_0() // Critical for scrolling in flex layouts
             .child(
                 div()
                     .id("chat-list")
                     .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.chat_scroll_handle)
                     .p(px(16.0))
                     .flex()
                     .flex_col()
                     .gap(px(12.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.chat_scroll_handle)
                     .children(self.messages.iter().map(|msg| {
                         let (bg, text_col, is_user) = match msg.role {
                             ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff), true),
@@ -997,6 +998,7 @@ impl MobieWorkspace {
                                     div()
                                         .text_sm()
                                         .text_color(text_col)
+                                        .whitespace_normal() // Ensure text wraps
                                         .child(msg.content.clone()),
                                 ),
                         )
@@ -1181,6 +1183,7 @@ impl Render for MobieWorkspace {
                 AppView::Chat => div()
                     .flex_1()
                     .h_full()
+                    .min_h_0() // Ensure children can scroll
                     .flex()
                     .flex_col()
                     .child(
