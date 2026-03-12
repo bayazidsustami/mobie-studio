@@ -4,6 +4,7 @@ use tracing::warn;
 #[derive(Debug, Clone)]
 pub struct UiElement {
     pub index: usize,
+    pub parent_index: Option<usize>,
     pub class: String,
     pub text: String,
     pub resource_id: String,
@@ -45,6 +46,11 @@ impl std::fmt::Display for UiElement {
                 .unwrap_or(&self.resource_id);
             parts.push(format!("id={}", short_id));
         }
+
+        if let Some(p_idx) = self.parent_index {
+            parts.push(format!("parent={}", p_idx));
+        }
+
         parts.push(format!("bounds={}", self.bounds));
 
         let mut flags = Vec::new();
@@ -75,14 +81,23 @@ impl std::fmt::Display for UiElement {
 pub fn parse_ui_xml(raw_xml: &str) -> Vec<UiElement> {
     let mut elements = Vec::new();
     let mut index = 0usize;
+    let mut parent_stack: Vec<usize> = Vec::new();
 
-    // Simple attribute-based parsing — uiautomator XML uses a flat-ish structure
-    // where each `<node .../>` has all attributes inline.
-    for segment in raw_xml.split("<node ") {
-        if segment.trim().is_empty() || !segment.contains("class=") {
-            continue;
-        }
+    // Use a simple state-machine-like approach to track nesting.
+    // We look for "<node " to start a node and "/>" or "</node>" to end it.
+    let mut cursor = 0;
+    while let Some(node_start) = raw_xml[cursor..].find("<node ") {
+        let absolute_start = cursor + node_start;
+        let segment_start = absolute_start + 6; // skip "<node "
+        
+        // Find the end of this node's opening tag
+        let tag_end = match raw_xml[segment_start..].find('>') {
+            Some(e) => segment_start + e,
+            None => break,
+        };
 
+        let segment = &raw_xml[segment_start..tag_end];
+        
         let class = extract_attr(segment, "class").unwrap_or_default();
         let text = extract_attr(segment, "text").unwrap_or_default();
         let resource_id = extract_attr(segment, "resource-id").unwrap_or_default();
@@ -105,23 +120,56 @@ pub fn parse_ui_xml(raw_xml: &str) -> Vec<UiElement> {
             || scrollable
             || focused;
 
-        if !is_meaningful {
-            continue;
+        let mut current_node_index = None;
+        if is_meaningful {
+            let parent_index = parent_stack.last().copied();
+            elements.push(UiElement {
+                index,
+                parent_index,
+                class,
+                text,
+                resource_id,
+                content_desc,
+                bounds,
+                clickable,
+                scrollable,
+                checked,
+                focused,
+            });
+            current_node_index = Some(index);
+            index += 1;
         }
 
-        elements.push(UiElement {
-            index,
-            class,
-            text,
-            resource_id,
-            content_desc,
-            bounds,
-            clickable,
-            scrollable,
-            checked,
-            focused,
-        });
-        index += 1;
+        // Check if this node is self-closing or has children
+        let is_self_closing = segment.trim_end().ends_with('/');
+        if !is_self_closing {
+            // Push to stack. If this node was filtered, we still push a placeholder
+            // to maintain depth, but we don't have an index for it.
+            // Actually, we should only track meaningful parents for "parent=" hints.
+            // If a parent is filtered, we might want to link to its own parent.
+            if let Some(idx) = current_node_index {
+                parent_stack.push(idx);
+            } else if let Some(last_meaningful) = parent_stack.last().copied() {
+                parent_stack.push(last_meaningful);
+            }
+        }
+
+        // Move cursor to after the tag
+        cursor = tag_end + 1;
+
+        // Simple check for closing tags before the next node start
+        // This is a bit naive but should work for well-formed uiautomator XML
+        let next_node = raw_xml[cursor..].find("<node ");
+        let search_range = match next_node {
+            Some(n) => &raw_xml[cursor..cursor + n],
+            None => &raw_xml[cursor..],
+        };
+
+        // Count "</node>" occurrences
+        let closings = search_range.match_indices("</node>").count();
+        for _ in 0..closings {
+            parent_stack.pop();
+        }
     }
 
     elements
