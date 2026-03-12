@@ -30,6 +30,8 @@ pub enum AgentMessage {
     UpdateConfig(LlmConfig),
     /// Select a specific ADB device by serial ID.
     SelectDevice(String),
+    /// Refresh the list of connected devices.
+    RefreshDevices,
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -98,6 +100,10 @@ impl AgentEngine {
                             id
                         )))
                         .await;
+                }
+                AgentMessage::RefreshDevices => {
+                    info!("Refreshing device list...");
+                    Self::refresh_devices(&device, &update_tx).await;
                 }
 
                 // ----------------------------------------------------------------

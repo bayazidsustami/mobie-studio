@@ -743,6 +743,12 @@ impl MobieWorkspace {
             role: ChatRole::System,
             content: "Refreshing device list...".to_string(),
         });
+        
+        let tx = self.cmd_tx.clone();
+        cx.spawn(async move |_, _| {
+            let _ = tx.send(AgentMessage::RefreshDevices).await;
+        }).detach();
+
         cx.notify();
     }
 
