@@ -1,9 +1,9 @@
 # Implementation Plan: Improve Testing Agent
 
 ## Phase 1: Observation & History Enhancement
-- [ ] Task: Refine XML compression and element filtering logic in `src/device/xml_parser.rs`.
-    - [ ] Write Tests for enhanced compression
-    - [ ] Implement Feature
+- [x] Task: Refine XML compression and element filtering logic in `src/device/xml_parser.rs`. [5dc6b07]
+    - [x] Write Tests for enhanced compression
+    - [x] Implement Feature
 - [ ] Task: Implement `SessionHistory` tracker in `src/agent/mod.rs` to store recent actions.
     - [ ] Write Tests for history tracking and loop detection
     - [ ] Implement Feature
