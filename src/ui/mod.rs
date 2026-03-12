@@ -996,10 +996,14 @@ impl MobieWorkspace {
                                 )
                                 .child(
                                     div()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            msg.content.clone()
+                                        )
                                         .text_sm()
                                         .text_color(text_col)
-                                        .whitespace_normal() // Ensure text wraps
-                                        .child(msg.content.clone()),
+                                        .whitespace_normal(),
                                 ),
                         )
                     }))
