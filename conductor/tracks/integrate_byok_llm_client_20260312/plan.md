@@ -1,10 +1,10 @@
 # Implementation Plan: Integrate BYOK LLM Client
 
-## Phase 1: Client Setup and Configuration
+## Phase 1: Client Setup and Configuration [checkpoint: 96d0fcb]
 - [x] Task: Set up configuration structure and load/save functions using `serde` and `dirs`. [ed66c35]
     - [x] Write Tests for config handling
     - [x] Implement Feature
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Client Setup and Configuration' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Client Setup and Configuration' (Protocol in workflow.md)
 
 ## Phase 2: HTTP Client and Prompting
 - [ ] Task: Implement async HTTP client wrapper around `reqwest` targeting generic OpenAI API endpoints.
