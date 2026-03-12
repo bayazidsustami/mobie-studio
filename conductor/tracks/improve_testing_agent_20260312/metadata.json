@@ -1,0 +1,8 @@
+{
+  "track_id": "improve_testing_agent_20260312",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-03-12T14:30:00Z",
+  "updated_at": "2026-03-12T14:30:00Z",
+  "description": "Improve the testing agent with planning, memory, and better verification."
+}
