@@ -10,7 +10,10 @@ use tracing::info;
 
 use crate::agent::AgentEngine;
 use crate::config::load_config;
-use crate::ui::{MobieWorkspace, CancelGoal, SendMessage};
+use crate::ui::{
+    MobieWorkspace, Backspace, CancelGoal, Delete, End, Enter, Home, Left, Right, SaveSettings,
+    SelectAll, SendMessage,
+};
 
 fn main() {
     // Initialize structured logging
@@ -23,8 +26,20 @@ fn main() {
     Application::new().run(move |app| {
         // Bind key actions
         app.bind_keys([
-            KeyBinding::new("enter", SendMessage, None),
+            KeyBinding::new("enter", Enter, None),
+            KeyBinding::new("cmd-enter", SendMessage, None),
+            KeyBinding::new("ctrl-enter", SendMessage, None),
             KeyBinding::new("escape", CancelGoal, None),
+            KeyBinding::new("backspace", Backspace, None),
+            KeyBinding::new("delete", Delete, None),
+            KeyBinding::new("left", Left, None),
+            KeyBinding::new("right", Right, None),
+            KeyBinding::new("home", Home, None),
+            KeyBinding::new("end", End, None),
+            KeyBinding::new("cmd-a", SelectAll, None),
+            KeyBinding::new("ctrl-a", SelectAll, None),
+            KeyBinding::new("cmd-s", SaveSettings, None),
+            KeyBinding::new("ctrl-s", SaveSettings, None),
         ]);
 
         let config_for_window = initial_config.clone();
