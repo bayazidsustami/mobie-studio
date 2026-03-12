@@ -44,7 +44,10 @@ pub fn load_config() -> AppConfig {
                 cfg
             }
             Err(e) => {
-                warn!("Failed to parse config file {:?}: {}. Using defaults.", path, e);
+                warn!(
+                    "Failed to parse config file {:?}: {}. Using defaults.",
+                    path, e
+                );
                 AppConfig::default()
             }
         },
@@ -65,8 +68,7 @@ pub fn save_config(cfg: &AppConfig) -> Result<()> {
             .with_context(|| format!("Failed to create config dir {:?}", parent))?;
     }
 
-    let contents =
-        toml::to_string_pretty(cfg).context("Failed to serialize config to TOML")?;
+    let contents = toml::to_string_pretty(cfg).context("Failed to serialize config to TOML")?;
 
     std::fs::write(&path, contents)
         .with_context(|| format!("Failed to write config to {:?}", path))?;
