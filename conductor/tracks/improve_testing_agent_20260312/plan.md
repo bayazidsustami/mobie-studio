@@ -9,14 +9,14 @@
     - [x] Implement Feature
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Observation & History Enhancement' (Protocol in workflow.md)
 
-## Phase 2: Planning & Reasoning Logic
+## Phase 2: Planning & Reasoning Logic [checkpoint: a675669]
 - [x] Task: Update system prompt in `src/llm/prompt.rs` to support planning and history context. [e0a9737]
     - [x] Write Tests for prompt template with history and plan context
     - [x] Implement Feature
 - [x] Task: Refactor `AgentEngine` loop in `src/agent/mod.rs` to handle multi-step planning and explicit verification cycles. [19a36c8]
     - [x] Write Tests for planning and verification state machine
     - [x] Implement Feature
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Planning & Reasoning Logic' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Planning & Reasoning Logic' (Protocol in workflow.md)
 
 ## Phase 3: Robust Interaction Patterns
 - [ ] Task: Implement logic to detect and wait for dynamic loading states (spinners, etc.) in `AgentEngine`.
