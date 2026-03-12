@@ -1,9 +1,9 @@
 pub mod action;
 
+pub use action::Action;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::agent::action::Action;
 use crate::config::AppConfig;
 use crate::device::DeviceBridge;
 use crate::llm::{LlmClient, LlmConfig};
@@ -45,6 +45,50 @@ pub enum AgentUpdate {
 
 /// Maximum iterations per goal to prevent infinite loops.
 const MAX_ITERATIONS: usize = 20;
+
+// ---------------------------------------------------------------------------
+// Session History
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct SessionHistory {
+    actions: Vec<Action>,
+    limit: usize,
+}
+
+impl SessionHistory {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            actions: Vec::new(),
+            limit,
+        }
+    }
+
+    pub fn push(&mut self, action: Action) {
+        if self.actions.len() >= self.limit {
+            self.actions.remove(0);
+        }
+        self.actions.push(action);
+    }
+
+    pub fn get_recent(&self, count: usize) -> &[Action] {
+        let start = self.actions.len().saturating_sub(count);
+        &self.actions[start..]
+    }
+
+    /// Simple loop detection: check if the last action is the same as the one before it.
+    /// This can be expanded to check longer patterns.
+    pub fn is_looping(&self) -> bool {
+        if self.actions.len() < 2 {
+            return false;
+        }
+        let last = &self.actions[self.actions.len() - 1];
+        let prev = &self.actions[self.actions.len() - 2];
+
+        // For now, compare Display output as a proxy for identity
+        last.to_string() == prev.to_string()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Agent Engine
