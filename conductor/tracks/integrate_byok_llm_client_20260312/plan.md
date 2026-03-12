@@ -1,0 +1,22 @@
+# Implementation Plan: Integrate BYOK LLM Client
+
+## Phase 1: Client Setup and Configuration
+- [ ] Task: Set up configuration structure and load/save functions using `serde` and `dirs`.
+    - [ ] Write Tests for config handling
+    - [ ] Implement Feature
+- [ ] Task: Conductor - User Manual Verification 'Phase 1: Client Setup and Configuration' (Protocol in workflow.md)
+
+## Phase 2: HTTP Client and Prompting
+- [ ] Task: Implement async HTTP client wrapper around `reqwest` targeting generic OpenAI API endpoints.
+    - [ ] Write Tests for HTTP request formatting
+    - [ ] Implement Feature
+- [ ] Task: Create prompt template module for compressing UI XML and injecting the user goal.
+    - [ ] Write Tests for XML compression and templating
+    - [ ] Implement Feature
+- [ ] Task: Conductor - User Manual Verification 'Phase 2: HTTP Client and Prompting' (Protocol in workflow.md)
+
+## Phase 3: Response Parsing
+- [ ] Task: Implement `serde` models and parsing logic to convert LLM JSON responses into `Action` items.
+    - [ ] Write Tests for JSON response parsing
+    - [ ] Implement Feature
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Response Parsing' (Protocol in workflow.md)
