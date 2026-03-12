@@ -11,12 +11,19 @@ use crate::llm::LlmConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
+    #[serde(default = "default_version")]
+    pub version: u32,
     pub llm: LlmConfig,
+}
+
+fn default_version() -> u32 {
+    1
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            version: 1,
             llm: LlmConfig::default(),
         }
     }
@@ -97,6 +104,7 @@ mod tests {
     #[test]
     fn test_config_with_api_key() {
         let cfg = AppConfig {
+            version: 1,
             llm: LlmConfig {
                 api_key: "sk-test-key".to_string(),
                 model: "gpt-4o-mini".to_string(),
