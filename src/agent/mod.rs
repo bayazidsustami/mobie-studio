@@ -181,6 +181,8 @@ impl AgentEngine {
                     let mut recorded_steps: Vec<TestStep> = Vec::new();
                     let mut iteration = 0usize;
                     let mut goal_success = false;
+                    let mut history = SessionHistory::new(5);
+                    let mut current_sub_goal: Option<String> = None;
 
                     'agent_loop: loop {
                         iteration += 1;
@@ -234,7 +236,15 @@ impl AgentEngine {
                             .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                             .await;
 
-                        let action = match llm.think(&raw_xml, &goal).await {
+                        let action = match llm
+                            .think(
+                                &raw_xml,
+                                &goal,
+                                current_sub_goal.as_deref(),
+                                history.get_recent(5),
+                            )
+                            .await
+                        {
                             Ok(a) => a,
                             Err(e) => {
                                 error!("LLM think failed: {}", e);
@@ -244,14 +254,19 @@ impl AgentEngine {
                                     )))
                                     .await;
                                 let _ = update_tx
-                                    .send(AgentUpdate::AgentReply(format!(
-                                        "❌ LLM error: {}",
-                                        e
-                                    )))
+                                    .send(AgentUpdate::AgentReply(format!("❌ LLM error: {}", e)))
                                     .await;
                                 break;
                             }
                         };
+
+                        // Update current sub-goal from LLM response
+                        if let Some(new_sub) = action.sub_goal() {
+                            if Some(new_sub) != current_sub_goal.as_deref() {
+                                info!("New sub-goal: {}", new_sub);
+                                current_sub_goal = Some(new_sub.to_string());
+                            }
+                        }
 
                         info!("Action decided: {}", action);
                         let _ = update_tx
@@ -272,6 +287,17 @@ impl AgentEngine {
                                 .await;
                             goal_success = *success;
                             break;
+                        }
+
+                        // Check for loops
+                        history.push(action.clone());
+                        if history.is_looping() {
+                            warn!("Loop detected — agent is repeating actions");
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(
+                                    "⚠️ Loop detected. Retrying with history awareness...".to_string(),
+                                ))
+                                .await;
                         }
 
                         // Record this step
@@ -358,15 +384,26 @@ impl AgentEngine {
 fn action_to_test_step(action: &Action) -> TestStep {
     use serde_json::json;
     let (action_name, params, reasoning) = match action {
-        Action::Tap { x, y, reasoning } => {
+        Action::Tap {
+            x,
+            y,
+            reasoning,
+            sub_goal,
+        } => {
             let mut p = std::collections::HashMap::new();
             p.insert("x".to_string(), json!(x));
             p.insert("y".to_string(), json!(y));
+            p.insert("sub_goal".to_string(), json!(sub_goal));
             ("tap", p, reasoning.clone())
         }
-        Action::Input { text, reasoning } => {
+        Action::Input {
+            text,
+            reasoning,
+            sub_goal,
+        } => {
             let mut p = std::collections::HashMap::new();
             p.insert("text".to_string(), json!(text));
+            p.insert("sub_goal".to_string(), json!(sub_goal));
             ("input", p, reasoning.clone())
         }
         Action::Swipe {
@@ -374,6 +411,7 @@ fn action_to_test_step(action: &Action) -> TestStep {
             x,
             y,
             reasoning,
+            sub_goal,
         } => {
             let mut p = std::collections::HashMap::new();
             p.insert(
@@ -382,11 +420,17 @@ fn action_to_test_step(action: &Action) -> TestStep {
             );
             p.insert("x".to_string(), json!(x));
             p.insert("y".to_string(), json!(y));
+            p.insert("sub_goal".to_string(), json!(sub_goal));
             ("swipe", p, reasoning.clone())
         }
-        Action::KeyEvent { code, reasoning } => {
+        Action::KeyEvent {
+            code,
+            reasoning,
+            sub_goal,
+        } => {
             let mut p = std::collections::HashMap::new();
             p.insert("code".to_string(), json!(code));
+            p.insert("sub_goal".to_string(), json!(sub_goal));
             ("key_event", p, reasoning.clone())
         }
         Action::Done { .. } => (

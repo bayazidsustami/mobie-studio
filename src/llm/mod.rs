@@ -85,7 +85,13 @@ impl LlmClient {
     ///
     /// Uses the OpenAI-compatible `/v1/chat/completions` endpoint.
     /// If no API key is configured, returns a simulated action for development.
-    pub async fn think(&self, raw_xml: &str, goal: &str) -> Result<Action> {
+    pub async fn think(
+        &self,
+        raw_xml: &str,
+        goal: &str,
+        current_sub_goal: Option<&str>,
+        history: &[Action],
+    ) -> Result<Action> {
         info!(
             "LLM Client [{}]: Thinking about goal '{}'",
             self.config.model, goal
@@ -100,7 +106,7 @@ impl LlmClient {
             });
         }
 
-        let user_message = format_user_message(goal, raw_xml);
+        let user_message = format_user_message(goal, current_sub_goal, history, raw_xml);
 
         let request = ChatRequest {
             model: self.config.model.clone(),
@@ -206,7 +212,7 @@ mod tests {
         };
 
         let client = LlmClient::new(config);
-        let result = client.think("compressed xml", "test goal").await;
+        let result = client.think("compressed xml", "test goal", None, &[]).await;
 
         assert!(result.is_ok());
         mock.assert_async().await;
@@ -230,7 +236,7 @@ mod tests {
         };
 
         let client = LlmClient::new(config);
-        let result = client.think("xml", "goal").await;
+        let result = client.think("xml", "goal", None, &[]).await;
 
         assert!(result.is_err());
         let err = result.err().unwrap().to_string();
@@ -263,7 +269,7 @@ mod tests {
         };
 
         let client = LlmClient::new(config);
-        let result = client.think("xml", "goal").await;
+        let result = client.think("xml", "goal", None, &[]).await;
 
         assert!(result.is_ok());
         let action = result.unwrap();
