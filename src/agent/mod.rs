@@ -5,7 +5,7 @@ use tracing::{error, info, warn};
 
 use crate::agent::action::Action;
 use crate::config::AppConfig;
-use crate::device::{compress_xml, DeviceBridge};
+use crate::device::DeviceBridge;
 use crate::llm::{LlmClient, LlmConfig};
 use crate::yaml_exporter::{export, TestCase, TestStep};
 
@@ -177,9 +177,6 @@ impl AgentEngine {
                             }
                         };
 
-                        let compressed = compress_xml(&raw_xml);
-                        info!("Compressed UI: {} chars", compressed.len());
-
                         // Check if a Stop was sent during observe
                         if let Ok(AgentMessage::Stop) = cmd_rx.try_recv() {
                             let _ = update_tx
@@ -193,7 +190,7 @@ impl AgentEngine {
                             .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                             .await;
 
-                        let action = match llm.think(&compressed, &goal).await {
+                        let action = match llm.think(&raw_xml, &goal).await {
                             Ok(a) => a,
                             Err(e) => {
                                 error!("LLM think failed: {}", e);
