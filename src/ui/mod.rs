@@ -2,6 +2,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use tokio::sync::mpsc;
 use std::ops::Range;
+use smallvec::SmallVec;
 
 use crate::agent::{AgentMessage, AgentStatus, AgentUpdate};
 use crate::config::{save_config, AppConfig};
@@ -80,6 +81,9 @@ pub struct TextInput {
     selection_anchor: Option<usize>, // Byte offset
     placeholder: String,
     is_masked: bool,
+    
+    // Caching for performance
+    last_wrapped_lines: Option<(String, Pixels, SmallVec<[WrappedLine; 1]>)>,
 }
 
 impl TextInput {
@@ -92,11 +96,13 @@ impl TextInput {
             selection_anchor: None,
             placeholder,
             is_masked: false,
+            last_wrapped_lines: None,
         }
     }
 
     pub fn set_masked(&mut self, masked: bool) {
         self.is_masked = masked;
+        self.last_wrapped_lines = None;
     }
 
     pub fn text(&self) -> &str {
@@ -289,6 +295,47 @@ impl TextInput {
         }
         cx.notify();
     }
+
+    fn shape_text(&mut self, window: &mut Window, width: Pixels) -> SmallVec<[WrappedLine; 1]> {
+        let display_text = if self.text.is_empty() {
+            self.placeholder.clone()
+        } else if self.is_masked {
+            "*".repeat(self.text.chars().count())
+        } else {
+            self.text.clone()
+        };
+
+        if let Some((ref last_text, last_width, ref last_lines)) = self.last_wrapped_lines {
+            if last_text == &display_text && last_width == width {
+                return last_lines.clone();
+            }
+        }
+
+        let text_color = if self.text.is_empty() {
+            rgb(0x555566)
+        } else {
+            rgb(0xeeeeff)
+        };
+
+        let font_size = px(14.0);
+        let wrapped_lines = window.text_system().shape_text(
+            display_text.clone().into(),
+            font_size,
+            &[TextRun {
+                len: display_text.len(),
+                color: text_color.into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+                font: window.text_style().font(),
+            }],
+            Some(width),
+            None
+        ).unwrap_or_default();
+
+        self.last_wrapped_lines = Some((display_text, width, wrapped_lines.clone()));
+        wrapped_lines
+    }
 }
 
 impl Render for TextInput {
@@ -350,46 +397,16 @@ impl Element for TextInputElement {
         window: &mut Window,
         app: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let (text, placeholder) = {
-            let state = self.view.read(app);
-            (
-                if state.text.is_empty() {
-                    state.placeholder.clone()
-                } else {
-                    state.text.clone()
-                },
-                state.placeholder.clone(),
-            )
-        };
-
-        let font_size = px(14.0);
-        let line_height = window.line_height();
         let available_width = window.viewport_size().width - px(64.0);
-
-        let wrapped_lines = window.text_system().shape_text(
-            text.clone().into(),
-            font_size,
-            &[TextRun {
-                len: if text == placeholder { placeholder.len() } else { text.len() },
-                color: rgb(0x000000).into(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-                font: window.text_style().font(),
-            }],
-            Some(available_width),
-            None
-        );
-
-        let height = if let Ok(lines) = wrapped_lines {
+        let line_height = window.line_height();
+        let height = self.view.update(app, |this, _cx| {
+            let lines = this.shape_text(window, available_width);
             let mut total_height = px(0.0);
             for line in lines {
                 total_height += line.size(line_height).height;
             }
             total_height.max(line_height)
-        } else {
-            line_height
-        };
+        });
 
         let mut style = Style::default();
         style.size.width = relative(1.).into();
@@ -420,16 +437,8 @@ impl Element for TextInputElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (text, is_focused, text_is_empty, cursor_offset, selection_range, focus_handle, _placeholder, _is_masked) = {
+        let (is_focused, cursor_offset, selection_range, focus_handle, is_masked, text_len) = {
             let state = self.view.read(cx);
-            let display_text = if state.text.is_empty() {
-                state.placeholder.clone()
-            } else if state.is_masked {
-                "*".repeat(state.text.chars().count())
-            } else {
-                state.text.clone()
-            };
-
             let (mapped_cursor, mapped_selection) = if state.is_masked && !state.text.is_empty() {
                 let char_count_to_cursor = state.text[..state.cursor_offset.min(state.text.len())].chars().count();
                 let mapped_sel = state.selection_range().map(|r| {
@@ -443,40 +452,20 @@ impl Element for TextInputElement {
             };
 
             (
-                display_text,
                 state.focus_handle.is_focused(window),
-                state.text.is_empty(),
                 mapped_cursor,
                 mapped_selection,
                 state.focus_handle.clone(),
-                state.placeholder.clone(),
                 state.is_masked,
+                state.text.len(),
             )
         };
 
-        let text_color = if text_is_empty {
-            rgb(0x555566)
-        } else {
-            rgb(0xeeeeff)
-        };
+        let wrapped_lines = self.view.update(cx, |this, _cx| {
+            this.shape_text(window, bounds.size.width)
+        });
 
-        let font_size = px(14.0);
         let line_height = window.line_height();
-        
-        let wrapped_lines = window.text_system().shape_text(
-            text.clone().into(),
-            font_size,
-            &[TextRun {
-                len: text.len(),
-                color: text_color.into(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-                font: window.text_style().font(),
-            }],
-            Some(bounds.size.width),
-            None
-        ).unwrap();
 
         // Handle mouse clicks to set cursor position
         window.on_mouse_event({
@@ -484,6 +473,8 @@ impl Element for TextInputElement {
             let focus_handle = focus_handle.clone();
             let bounds = bounds;
             let wrapped_lines = wrapped_lines.clone();
+            let is_masked = is_masked;
+            let text_len = text_len;
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                     window.focus(&focus_handle);
@@ -506,7 +497,7 @@ impl Element for TextInputElement {
                     }
 
                     view.update(cx, |this, cx| {
-                        let actual_index = if this.is_masked && !this.text.is_empty() {
+                        let actual_index = if is_masked && text_len > 0 {
                             this.text.char_indices().map(|(i, _)| i).nth(new_offset).unwrap_or(this.text.len())
                         } else {
                             new_offset
@@ -529,15 +520,17 @@ impl Element for TextInputElement {
         // Map mouse drag to selection
         window.on_mouse_event({
             let view = self.view.clone();
-            let shaped_lines = wrapped_lines.clone();
+            let wrapped_lines = wrapped_lines.clone();
             let bounds = bounds;
+            let is_masked = is_masked;
+            let text_len = text_len;
             move |event: &MouseMoveEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && bounds.contains(&event.position) {
                     let local_point = event.position - bounds.origin;
                     let mut new_offset = 0;
                     let mut current_y = px(0.0);
                     let line_height = window.line_height();
-                    for line in &shaped_lines {
+                    for line in &wrapped_lines {
                         let line_size = line.size(line_height);
                         if local_point.y >= current_y && local_point.y < current_y + line_size.height {
                             let local_line_point = point(local_point.x, local_point.y - current_y);
@@ -551,7 +544,7 @@ impl Element for TextInputElement {
                     }
 
                     view.update(cx, |this, cx| {
-                        let actual_index = if this.is_masked && !this.text.is_empty() {
+                        let actual_index = if is_masked && text_len > 0 {
                             this.text.char_indices().map(|(i, _)| i).nth(new_offset).unwrap_or(this.text.len())
                         } else {
                             new_offset
@@ -688,6 +681,7 @@ impl EntityInputHandler for TextInput {
                 self.selection_anchor = None;
             }
         }
+        self.last_wrapped_lines = None; // Invalidate cache
         cx.notify();
     }
 
