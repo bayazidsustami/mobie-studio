@@ -5,7 +5,7 @@ use serde::Deserialize;
 /// The LLM returns JSON with an `"action"` tag that maps to one of these variants.
 /// Example JSON:
 /// ```json
-/// { "action": "tap", "x": 200, "y": 300, "reasoning": "Tapping Settings button" }
+/// { "sub_goal": "Open settings", "action": "tap", "x": 200, "y": 300, "reasoning": "Tapping Settings button" }
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -15,12 +15,16 @@ pub enum Action {
         x: u32,
         y: u32,
         #[serde(default)]
+        sub_goal: String,
+        #[serde(default)]
         reasoning: String,
     },
 
     /// Type text into the currently focused field.
     Input {
         text: String,
+        #[serde(default)]
+        sub_goal: String,
         #[serde(default)]
         reasoning: String,
     },
@@ -33,12 +37,16 @@ pub enum Action {
         #[serde(default = "default_swipe_y")]
         y: u32,
         #[serde(default)]
+        sub_goal: String,
+        #[serde(default)]
         reasoning: String,
     },
 
     /// Send a key event (e.g., Back=4, Home=3, Enter=66).
     KeyEvent {
         code: u32,
+        #[serde(default)]
+        sub_goal: String,
         #[serde(default)]
         reasoning: String,
     },
@@ -77,15 +85,25 @@ impl Action {
             Action::Done { reason, .. } => reason,
         }
     }
+
+    pub fn sub_goal(&self) -> Option<&str> {
+        match self {
+            Action::Tap { sub_goal, .. } => Some(sub_goal),
+            Action::Input { sub_goal, .. } => Some(sub_goal),
+            Action::Swipe { sub_goal, .. } => Some(sub_goal),
+            Action::KeyEvent { sub_goal, .. } => Some(sub_goal),
+            Action::Done { .. } => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Action::Tap { x, y, reasoning } => {
+            Action::Tap { x, y, reasoning, .. } => {
                 write!(f, "Tap({}, {}) — {}", x, y, reasoning)
             }
-            Action::Input { text, reasoning } => {
+            Action::Input { text, reasoning, .. } => {
                 write!(f, "Input(\"{}\") — {}", text, reasoning)
             }
             Action::Swipe {
@@ -93,10 +111,11 @@ impl std::fmt::Display for Action {
                 x,
                 y,
                 reasoning,
+                ..
             } => {
                 write!(f, "Swipe({:?} from {},{}) — {}", direction, x, y, reasoning)
             }
-            Action::KeyEvent { code, reasoning } => {
+            Action::KeyEvent { code, reasoning, .. } => {
                 write!(f, "KeyEvent({}) — {}", code, reasoning)
             }
             Action::Done { success, reason } => {
@@ -116,13 +135,19 @@ mod tests {
 
     #[test]
     fn test_deserialize_tap() {
-        let json = r#"{"action": "tap", "x": 200, "y": 300, "reasoning": "Tap settings"}"#;
+        let json = r#"{"action": "tap", "x": 200, "y": 300, "reasoning": "Tap settings", "sub_goal": "Open Settings"}"#;
         let action: Action = serde_json::from_str(json).unwrap();
         match action {
-            Action::Tap { x, y, reasoning } => {
+            Action::Tap {
+                x,
+                y,
+                reasoning,
+                sub_goal,
+            } => {
                 assert_eq!(x, 200);
                 assert_eq!(y, 300);
                 assert_eq!(reasoning, "Tap settings");
+                assert_eq!(sub_goal, "Open Settings");
             }
             _ => panic!("Expected Tap"),
         }
@@ -133,7 +158,7 @@ mod tests {
         let json = r#"{"action": "input", "text": "hello world", "reasoning": "Typing search"}"#;
         let action: Action = serde_json::from_str(json).unwrap();
         match action {
-            Action::Input { text, reasoning } => {
+            Action::Input { text, reasoning, .. } => {
                 assert_eq!(text, "hello world");
                 assert_eq!(reasoning, "Typing search");
             }
@@ -160,7 +185,7 @@ mod tests {
         let json = r#"{"action": "key_event", "code": 4, "reasoning": "Press back"}"#;
         let action: Action = serde_json::from_str(json).unwrap();
         match action {
-            Action::KeyEvent { code, reasoning } => {
+            Action::KeyEvent { code, reasoning, .. } => {
                 assert_eq!(code, 4);
                 assert_eq!(reasoning, "Press back");
             }
