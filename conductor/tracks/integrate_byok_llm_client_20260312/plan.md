@@ -1,9 +1,9 @@
 # Implementation Plan: Integrate BYOK LLM Client
 
 ## Phase 1: Client Setup and Configuration
-- [ ] Task: Set up configuration structure and load/save functions using `serde` and `dirs`.
-    - [ ] Write Tests for config handling
-    - [ ] Implement Feature
+- [x] Task: Set up configuration structure and load/save functions using `serde` and `dirs`. [ed66c35]
+    - [x] Write Tests for config handling
+    - [x] Implement Feature
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Client Setup and Configuration' (Protocol in workflow.md)
 
 ## Phase 2: HTTP Client and Prompting
