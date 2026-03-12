@@ -79,6 +79,7 @@ pub struct TextInput {
     cursor_offset: usize, // Byte offset
     selection_anchor: Option<usize>, // Byte offset
     placeholder: String,
+    is_masked: bool,
 }
 
 impl TextInput {
@@ -90,7 +91,12 @@ impl TextInput {
             cursor_offset: len,
             selection_anchor: None,
             placeholder,
+            is_masked: false,
         }
+    }
+
+    pub fn set_masked(&mut self, masked: bool) {
+        self.is_masked = masked;
     }
 
     pub fn text(&self) -> &str {
@@ -355,19 +361,38 @@ impl Element for TextInputElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (text, is_focused, text_is_empty, cursor_offset, selection_range, focus_handle) = {
+        let (text, is_focused, text_is_empty, cursor_offset, selection_range, focus_handle, _is_masked) = {
             let state = self.view.read(cx);
+            let display_text = if state.text.is_empty() {
+                state.placeholder.clone()
+            } else if state.is_masked {
+                "*".repeat(state.text.chars().count())
+            } else {
+                state.text.clone()
+            };
+
+            // If masked, we need to map the byte offsets to character counts because the masked string
+            // has 1-byte chars ('*') for every char in the original string.
+            let (mapped_cursor, mapped_selection) = if state.is_masked && !state.text.is_empty() {
+                let char_count_to_cursor = state.text[..state.cursor_offset].chars().count();
+                let mapped_sel = state.selection_range().map(|r| {
+                    let start = state.text[..r.start].chars().count();
+                    let end = state.text[..r.end].chars().count();
+                    start..end
+                });
+                (char_count_to_cursor, mapped_sel)
+            } else {
+                (state.cursor_offset, state.selection_range())
+            };
+
             (
-                if state.text.is_empty() {
-                    state.placeholder.clone()
-                } else {
-                    state.text.clone()
-                },
+                display_text,
                 state.focus_handle.is_focused(window),
                 state.text.is_empty(),
-                state.cursor_offset,
-                state.selection_range(),
+                mapped_cursor,
+                mapped_selection,
                 state.focus_handle.clone(),
+                state.is_masked,
             )
         };
 
@@ -404,6 +429,13 @@ impl Element for TextInputElement {
                     let local_x = event.position.x - bounds.origin.x;
                     if let Some(index) = shaped_line.index_for_x(local_x) {
                         view.update(cx, |this, cx| {
+                            // If masked, 'index' is the char count. We need to convert it back to byte offset.
+                            let actual_index = if this.is_masked && !this.text.is_empty() {
+                                this.text.char_indices().map(|(i, _)| i).nth(index).unwrap_or(this.text.len())
+                            } else {
+                                index
+                            };
+
                             if event.modifiers.shift {
                                 if this.selection_anchor.is_none() {
                                     this.selection_anchor = Some(this.cursor_offset);
@@ -411,7 +443,7 @@ impl Element for TextInputElement {
                             } else {
                                 this.selection_anchor = None;
                             }
-                            this.cursor_offset = index;
+                            this.cursor_offset = actual_index;
                             cx.notify();
                         });
                     }
@@ -429,10 +461,16 @@ impl Element for TextInputElement {
                     let local_x = event.position.x - bounds.origin.x;
                     if let Some(index) = shaped_line.index_for_x(local_x) {
                         view.update(cx, |this, cx| {
+                            let actual_index = if this.is_masked && !this.text.is_empty() {
+                                this.text.char_indices().map(|(i, _)| i).nth(index).unwrap_or(this.text.len())
+                            } else {
+                                index
+                            };
+
                             if this.selection_anchor.is_none() {
                                 this.selection_anchor = Some(this.cursor_offset);
                             }
-                            this.cursor_offset = index;
+                            this.cursor_offset = actual_index;
                             cx.notify();
                         });
                     }
@@ -604,7 +642,11 @@ impl MobieWorkspace {
         .detach();
 
         let chat_input = cx.new(|cx| TextInput::new(cx, "Type a goal for the agent...".into(), String::new()));
-        let settings_api_key = cx.new(|cx| TextInput::new(cx, "sk-...".into(), initial_config.llm.api_key.clone()));
+        let settings_api_key = cx.new(|cx| {
+            let mut input = TextInput::new(cx, "sk-...".into(), initial_config.llm.api_key.clone());
+            input.set_masked(true);
+            input
+        });
         let settings_model = cx.new(|cx| TextInput::new(cx, "gpt-4o".into(), initial_config.llm.model.clone()));
         let settings_base_url = cx.new(|cx| TextInput::new(cx, "https://api.openai.com/v1".into(), initial_config.llm.base_url.clone()));
 
