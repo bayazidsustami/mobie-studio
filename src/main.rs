@@ -11,8 +11,10 @@ use tracing::info;
 use crate::agent::AgentEngine;
 use crate::config::load_config;
 use crate::ui::{
-    MobieWorkspace, Backspace, CancelGoal, Delete, End, Enter, Home, Left, Right, SaveSettings,
-    SelectAll, SendMessage,
+    MobieWorkspace, Backspace, CancelGoal, Delete, Enter, SaveSettings,
+    SelectAll, SendMessage, Copy, Cut, Paste,
+    MoveLeft, MoveRight, MoveHome, MoveEnd,
+    SelectLeft, SelectRight, SelectHome, SelectEnd,
 };
 
 fn main() {
@@ -32,12 +34,22 @@ fn main() {
             KeyBinding::new("escape", CancelGoal, None),
             KeyBinding::new("backspace", Backspace, None),
             KeyBinding::new("delete", Delete, None),
-            KeyBinding::new("left", Left, None),
-            KeyBinding::new("right", Right, None),
-            KeyBinding::new("home", Home, None),
-            KeyBinding::new("end", End, None),
+            KeyBinding::new("left", MoveLeft, None),
+            KeyBinding::new("shift-left", SelectLeft, None),
+            KeyBinding::new("right", MoveRight, None),
+            KeyBinding::new("shift-right", SelectRight, None),
+            KeyBinding::new("home", MoveHome, None),
+            KeyBinding::new("shift-home", SelectHome, None),
+            KeyBinding::new("end", MoveEnd, None),
+            KeyBinding::new("shift-end", SelectEnd, None),
             KeyBinding::new("cmd-a", SelectAll, None),
             KeyBinding::new("ctrl-a", SelectAll, None),
+            KeyBinding::new("cmd-c", Copy, None),
+            KeyBinding::new("ctrl-c", Copy, None),
+            KeyBinding::new("cmd-x", Cut, None),
+            KeyBinding::new("ctrl-x", Cut, None),
+            KeyBinding::new("cmd-v", Paste, None),
+            KeyBinding::new("ctrl-v", Paste, None),
             KeyBinding::new("cmd-s", SaveSettings, None),
             KeyBinding::new("ctrl-s", SaveSettings, None),
         ]);

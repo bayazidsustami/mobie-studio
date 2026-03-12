@@ -20,15 +20,19 @@ actions!(mobie, [
     SaveSettings,
     Backspace,
     Delete,
-    Left,
-    Right,
-    Home,
-    End,
     SelectAll,
     Enter,
     Copy,
     Cut,
-    Paste
+    Paste,
+    MoveLeft,
+    MoveRight,
+    MoveHome,
+    MoveEnd,
+    SelectLeft,
+    SelectRight,
+    SelectHome,
+    SelectEnd
 ]);
 
 // ---------------------------------------------------------------------------
@@ -95,13 +99,15 @@ impl TextInput {
 
     fn selection_range(&self) -> Option<Range<usize>> {
         let anchor = self.selection_anchor?;
-        if anchor < self.cursor_offset {
-            Some(anchor..self.cursor_offset)
-        } else if anchor > self.cursor_offset {
-            Some(self.cursor_offset..anchor)
-        } else {
-            None
+        let start = anchor.min(self.cursor_offset);
+        let end = anchor.max(self.cursor_offset);
+        
+        if self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
+            if start != end {
+                return Some(start..end);
+            }
         }
+        None
     }
 
     fn backspace(&mut self, _: &Backspace, _window: &mut Window, cx: &mut Context<Self>) {
@@ -135,18 +141,32 @@ impl TextInput {
         cx.notify();
     }
 
-    fn left(&mut self, _: &Left, _window: &mut Window, cx: &mut Context<Self>) {
+    fn move_left(&mut self, _: &MoveLeft, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selection_anchor = None;
         if self.cursor_offset > 0 {
             let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
             if let Some((prev_offset, _)) = char_indices.next_back() {
                 self.cursor_offset = prev_offset;
             }
         }
-        self.selection_anchor = None;
         cx.notify();
     }
 
-    fn right(&mut self, _: &Right, _window: &mut Window, cx: &mut Context<Self>) {
+    fn select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_offset);
+        }
+        if self.cursor_offset > 0 {
+            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
+            if let Some((prev_offset, _)) = char_indices.next_back() {
+                self.cursor_offset = prev_offset;
+            }
+        }
+        cx.notify();
+    }
+
+    fn move_right(&mut self, _: &MoveRight, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selection_anchor = None;
         if self.cursor_offset < self.text.len() {
             let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
             if let Some((next_offset, _)) = char_indices.next() {
@@ -155,19 +175,49 @@ impl TextInput {
                 self.cursor_offset = self.text.len();
             }
         }
-        self.selection_anchor = None;
         cx.notify();
     }
 
-    fn home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
+    fn select_right(&mut self, _: &SelectRight, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_offset);
+        }
+        if self.cursor_offset < self.text.len() {
+            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
+            if let Some((next_offset, _)) = char_indices.next() {
+                self.cursor_offset = next_offset;
+            } else {
+                self.cursor_offset = self.text.len();
+            }
+        }
+        cx.notify();
+    }
+
+    fn move_home(&mut self, _: &MoveHome, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selection_anchor = None;
         self.cursor_offset = 0;
-        self.selection_anchor = None;
         cx.notify();
     }
 
-    fn end(&mut self, _: &End, _window: &mut Window, cx: &mut Context<Self>) {
-        self.cursor_offset = self.text.len();
+    fn select_home(&mut self, _: &SelectHome, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_offset);
+        }
+        self.cursor_offset = 0;
+        cx.notify();
+    }
+
+    fn move_end(&mut self, _: &MoveEnd, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection_anchor = None;
+        self.cursor_offset = self.text.len();
+        cx.notify();
+    }
+
+    fn select_end(&mut self, _: &SelectEnd, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor_offset);
+        }
+        self.cursor_offset = self.text.len();
         cx.notify();
     }
 
@@ -205,8 +255,16 @@ impl TextInput {
         cx.dispatch_action(&SendMessage);
     }
 
-    fn on_mouse_down(&mut self, _event: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
+        if event.modifiers.shift {
+            if self.selection_anchor.is_none() {
+                self.selection_anchor = Some(self.cursor_offset);
+            }
+        } else {
+            self.selection_anchor = None;
+        }
+        cx.notify();
     }
 }
 
@@ -223,10 +281,14 @@ impl Render for TextInput {
             .track_focus(&focus_handle)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::left))
-            .on_action(cx.listener(Self::right))
-            .on_action(cx.listener(Self::home))
-            .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::move_left))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::move_right))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::move_home))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::move_end))
+            .on_action(cx.listener(Self::select_end))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
