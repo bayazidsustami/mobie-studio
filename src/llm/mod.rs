@@ -236,4 +236,44 @@ mod tests {
         let err = result.err().unwrap().to_string();
         assert!(err.contains("LLM API returned error 500"));
     }
+
+    #[tokio::test]
+    async fn test_llm_client_markdown_stripping() {
+        let mut server = Server::new_async().await;
+        let url = server.url();
+
+        let mock = server.mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_body(r#"{
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"action\": \"tap\", \"x\": 10, \"y\": 20, \"reasoning\": \"test\"}\n```"
+                        }
+                    }
+                ]
+            }"#)
+            .create_async()
+            .await;
+
+        let config = LlmConfig {
+            api_key: "test-key".to_string(),
+            base_url: url,
+            ..LlmConfig::default()
+        };
+
+        let client = LlmClient::new(config);
+        let result = client.think("xml", "goal").await;
+
+        assert!(result.is_ok());
+        let action = result.unwrap();
+        match action {
+            Action::Tap { x, y, .. } => {
+                assert_eq!(x, 10);
+                assert_eq!(y, 20);
+            }
+            _ => panic!("Expected Tap action"),
+        }
+        mock.assert_async().await;
+    }
 }
