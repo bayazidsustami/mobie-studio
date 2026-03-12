@@ -211,3 +211,72 @@ impl LlmClient {
         Ok(action)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito::Server;
+
+    #[tokio::test]
+    async fn test_llm_client_request_formatting() {
+        let mut server = Server::new_async().await;
+        let url = server.url();
+
+        let mock = server.mock("POST", "/chat/completions")
+            .match_header("authorization", "Bearer test-key")
+            .match_header("content-type", "application/json")
+            .with_status(200)
+            .with_body(r#"{
+                "choices": [
+                    {
+                        "message": {
+                            "content": "{\"action\": \"done\", \"success\": true, \"reason\": \"test\"}"
+                        }
+                    }
+                ]
+            }"#)
+            .create_async()
+            .await;
+
+        let config = LlmConfig {
+            api_key: "test-key".to_string(),
+            base_url: url,
+            ..LlmConfig::default()
+        };
+
+        let client = LlmClient::new(config);
+        let result = client.think("compressed xml", "test goal").await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_llm_client_error_handling() {
+        let mut server = Server::new_async().await;
+        let url = server.url();
+
+        let _mock = server.mock("POST", "/chat/completions")
+            .with_status(500)
+            .with_body("Internal Server Error")
+            .create_async()
+            .await;
+
+        let config = LlmConfig {
+            api_key: "test-key".to_string(),
+            base_url: url,
+            ..LlmConfig::default()
+        };
+
+        let client = LlmClient::new(config);
+        let result = client.think("xml", "goal").await;
+
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("LLM API returned error 500"));
+    }
+}
