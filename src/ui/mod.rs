@@ -116,6 +116,22 @@ impl TextInput {
         None
     }
 
+    fn offset_to_utf16(&self, offset: usize) -> usize {
+        let offset = offset.min(self.text.len());
+        self.text[..offset].encode_utf16().count()
+    }
+
+    fn utf16_to_offset(&self, utf16_offset: usize) -> usize {
+        let mut current_utf16 = 0;
+        for (byte_offset, c) in self.text.char_indices() {
+            if current_utf16 >= utf16_offset {
+                return byte_offset;
+            }
+            current_utf16 += c.len_utf16();
+        }
+        self.text.len()
+    }
+
     fn backspace(&mut self, _: &Backspace, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(range) = self.selection_range() {
             self.text.replace_range(range.clone(), "");
@@ -252,7 +268,8 @@ impl TextInput {
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(item) = cx.read_from_clipboard() {
             if let Some(text) = item.text() {
-                self.replace_text_in_range(self.selection_range(), &text, window, cx);
+                let range = self.selection_range().map(|r| self.offset_to_utf16(r.start)..self.offset_to_utf16(r.end));
+                self.replace_text_in_range(range, &text, window, cx);
             }
         }
     }
@@ -333,9 +350,51 @@ impl Element for TextInputElement {
         window: &mut Window,
         app: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        let (text, placeholder) = {
+            let state = self.view.read(app);
+            (
+                if state.text.is_empty() {
+                    state.placeholder.clone()
+                } else {
+                    state.text.clone()
+                },
+                state.placeholder.clone(),
+            )
+        };
+
+        let font_size = px(14.0);
+        let line_height = window.line_height();
+        let available_width = window.viewport_size().width - px(64.0);
+
+        let wrapped_lines = window.text_system().shape_text(
+            text.clone().into(),
+            font_size,
+            &[TextRun {
+                len: if text == placeholder { placeholder.len() } else { text.len() },
+                color: rgb(0x000000).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+                font: window.text_style().font(),
+            }],
+            Some(available_width),
+            None
+        );
+
+        let height = if let Ok(lines) = wrapped_lines {
+            let mut total_height = px(0.0);
+            for line in lines {
+                total_height += line.size(line_height).height;
+            }
+            total_height.max(line_height)
+        } else {
+            line_height
+        };
+
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        style.size.height = height.into();
+
         (window.request_layout(style, [], app), ())
     }
 
@@ -361,7 +420,7 @@ impl Element for TextInputElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (text, is_focused, text_is_empty, cursor_offset, selection_range, focus_handle, _is_masked) = {
+        let (text, is_focused, text_is_empty, cursor_offset, selection_range, focus_handle, _placeholder, _is_masked) = {
             let state = self.view.read(cx);
             let display_text = if state.text.is_empty() {
                 state.placeholder.clone()
@@ -371,13 +430,11 @@ impl Element for TextInputElement {
                 state.text.clone()
             };
 
-            // If masked, we need to map the byte offsets to character counts because the masked string
-            // has 1-byte chars ('*') for every char in the original string.
             let (mapped_cursor, mapped_selection) = if state.is_masked && !state.text.is_empty() {
-                let char_count_to_cursor = state.text[..state.cursor_offset].chars().count();
+                let char_count_to_cursor = state.text[..state.cursor_offset.min(state.text.len())].chars().count();
                 let mapped_sel = state.selection_range().map(|r| {
-                    let start = state.text[..r.start].chars().count();
-                    let end = state.text[..r.end].chars().count();
+                    let start = state.text[..r.start.min(state.text.len())].chars().count();
+                    let end = state.text[..r.end.min(state.text.len())].chars().count();
                     start..end
                 });
                 (char_count_to_cursor, mapped_sel)
@@ -392,6 +449,7 @@ impl Element for TextInputElement {
                 mapped_cursor,
                 mapped_selection,
                 state.focus_handle.clone(),
+                state.placeholder.clone(),
                 state.is_masked,
             )
         };
@@ -403,7 +461,9 @@ impl Element for TextInputElement {
         };
 
         let font_size = px(14.0);
-        let shaped_line = window.text_system().shape_line(
+        let line_height = window.line_height();
+        
+        let wrapped_lines = window.text_system().shape_text(
             text.clone().into(),
             font_size,
             &[TextRun {
@@ -414,39 +474,54 @@ impl Element for TextInputElement {
                 strikethrough: None,
                 font: window.text_style().font(),
             }],
+            Some(bounds.size.width),
             None
-        );
+        ).unwrap();
 
-        // Map mouse clicks to cursor position
+        // Handle mouse clicks to set cursor position
         window.on_mouse_event({
             let view = self.view.clone();
-            let shaped_line = shaped_line.clone();
             let focus_handle = focus_handle.clone();
             let bounds = bounds;
+            let wrapped_lines = wrapped_lines.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                     window.focus(&focus_handle);
-                    let local_x = event.position.x - bounds.origin.x;
-                    if let Some(index) = shaped_line.index_for_x(local_x) {
-                        view.update(cx, |this, cx| {
-                            // If masked, 'index' is the char count. We need to convert it back to byte offset.
-                            let actual_index = if this.is_masked && !this.text.is_empty() {
-                                this.text.char_indices().map(|(i, _)| i).nth(index).unwrap_or(this.text.len())
-                            } else {
-                                index
-                            };
-
-                            if event.modifiers.shift {
-                                if this.selection_anchor.is_none() {
-                                    this.selection_anchor = Some(this.cursor_offset);
-                                }
-                            } else {
-                                this.selection_anchor = None;
+                    let local_point = event.position - bounds.origin;
+                    
+                    let mut new_offset = 0;
+                    let mut current_y = px(0.0);
+                    let line_height = window.line_height();
+                    for line in &wrapped_lines {
+                        let line_size = line.size(line_height);
+                        if local_point.y >= current_y && local_point.y < current_y + line_size.height {
+                            let local_line_point = point(local_point.x, local_point.y - current_y);
+                            if let Ok(index) = line.index_for_position(local_line_point, line_height) {
+                                new_offset += index;
+                                break;
                             }
-                            this.cursor_offset = actual_index;
-                            cx.notify();
-                        });
+                        }
+                        new_offset += line.len();
+                        current_y += line_size.height;
                     }
+
+                    view.update(cx, |this, cx| {
+                        let actual_index = if this.is_masked && !this.text.is_empty() {
+                            this.text.char_indices().map(|(i, _)| i).nth(new_offset).unwrap_or(this.text.len())
+                        } else {
+                            new_offset
+                        };
+
+                        if event.modifiers.shift {
+                            if this.selection_anchor.is_none() {
+                                this.selection_anchor = Some(this.cursor_offset);
+                            }
+                        } else {
+                            this.selection_anchor = None;
+                        }
+                        this.cursor_offset = actual_index;
+                        cx.notify();
+                    });
                 }
             }
         });
@@ -454,26 +529,40 @@ impl Element for TextInputElement {
         // Map mouse drag to selection
         window.on_mouse_event({
             let view = self.view.clone();
-            let shaped_line = shaped_line.clone();
+            let shaped_lines = wrapped_lines.clone();
             let bounds = bounds;
-            move |event: &MouseMoveEvent, phase, _window, cx| {
+            move |event: &MouseMoveEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && bounds.contains(&event.position) {
-                    let local_x = event.position.x - bounds.origin.x;
-                    if let Some(index) = shaped_line.index_for_x(local_x) {
-                        view.update(cx, |this, cx| {
-                            let actual_index = if this.is_masked && !this.text.is_empty() {
-                                this.text.char_indices().map(|(i, _)| i).nth(index).unwrap_or(this.text.len())
-                            } else {
-                                index
-                            };
-
-                            if this.selection_anchor.is_none() {
-                                this.selection_anchor = Some(this.cursor_offset);
+                    let local_point = event.position - bounds.origin;
+                    let mut new_offset = 0;
+                    let mut current_y = px(0.0);
+                    let line_height = window.line_height();
+                    for line in &shaped_lines {
+                        let line_size = line.size(line_height);
+                        if local_point.y >= current_y && local_point.y < current_y + line_size.height {
+                            let local_line_point = point(local_point.x, local_point.y - current_y);
+                            if let Ok(index) = line.index_for_position(local_line_point, line_height) {
+                                new_offset += index;
+                                break;
                             }
-                            this.cursor_offset = actual_index;
-                            cx.notify();
-                        });
+                        }
+                        new_offset += line.len();
+                        current_y += line_size.height;
                     }
+
+                    view.update(cx, |this, cx| {
+                        let actual_index = if this.is_masked && !this.text.is_empty() {
+                            this.text.char_indices().map(|(i, _)| i).nth(new_offset).unwrap_or(this.text.len())
+                        } else {
+                            new_offset
+                        };
+
+                        if this.selection_anchor.is_none() {
+                            this.selection_anchor = Some(this.cursor_offset);
+                        }
+                        this.cursor_offset = actual_index;
+                        cx.notify();
+                    });
                 }
             }
         });
@@ -481,31 +570,69 @@ impl Element for TextInputElement {
         // Paint selection highlight
         if is_focused {
             if let Some(ref range) = selection_range {
-                let start_x = shaped_line.x_for_index(range.start);
-                let end_x = shaped_line.x_for_index(range.end);
-                window.paint_quad(fill(
-                    Bounds {
-                        origin: point(bounds.origin.x + start_x, bounds.origin.y),
-                        size: size(end_x - start_x, window.line_height()),
-                    },
-                    rgba(0x4488cc44),
-                ));
+                let mut current_y = bounds.origin.y;
+                let mut remaining_start = range.start;
+                let mut remaining_end = range.end;
+
+                for line in &wrapped_lines {
+                    let line_size = line.size(line_height);
+                    if remaining_start < line.len() && remaining_end > 0 {
+                        let sel_start = remaining_start;
+                        let sel_end = remaining_end.min(line.len());
+                        
+                        let start_x = line.position_for_index(sel_start, line_height).unwrap_or(point(px(0.0), px(0.0))).x;
+                        let end_x = line.position_for_index(sel_end, line_height).unwrap_or(point(line_size.width, px(0.0))).x;
+
+                        window.paint_quad(fill(
+                            Bounds {
+                                origin: point(bounds.origin.x + start_x, current_y),
+                                size: size(end_x - start_x, line_height),
+                            },
+                            rgba(0x4488cc44),
+                        ));
+                    }
+                    remaining_start = remaining_start.saturating_sub(line.len());
+                    remaining_end = remaining_end.saturating_sub(line.len());
+                    current_y += line_size.height;
+                }
             }
         }
 
-        let _ = shaped_line.paint(bounds.origin, window.line_height(), window, cx);
+        // Paint wrapped lines
+        let mut current_origin = bounds.origin;
+        for line in &wrapped_lines {
+            let line_size = line.size(line_height);
+            let _ = line.paint(current_origin, line_height, TextAlign::Left, None, window, cx);
+            current_origin.y += line_size.height;
+        }
 
         window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.view.clone()), cx);
 
+        // Render cursor
         if is_focused && selection_range.is_none() {
-            let cursor_x = shaped_line.x_for_index(cursor_offset);
-            window.paint_quad(fill(
-                Bounds {
-                    origin: point(bounds.origin.x + cursor_x, bounds.origin.y),
-                    size: size(px(2.0), window.line_height()),
-                },
-                rgb(0xe94560),
-            ));
+            let mut current_y = bounds.origin.y;
+            let mut remaining_offset = cursor_offset;
+            let mut cursor_pos = None;
+
+            for line in &wrapped_lines {
+                if remaining_offset <= line.len() {
+                    let pos = line.position_for_index(remaining_offset, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                    cursor_pos = Some(point(bounds.origin.x + pos.x, current_y + pos.y));
+                    break;
+                }
+                remaining_offset -= line.len();
+                current_y += line.size(line_height).height;
+            }
+
+            if let Some(pos) = cursor_pos {
+                window.paint_quad(fill(
+                    Bounds {
+                        origin: pos,
+                        size: size(px(2.0), line_height),
+                    },
+                    rgb(0xe94560),
+                ));
+            }
         }
     }
 
@@ -516,14 +643,17 @@ impl Element for TextInputElement {
 
 impl EntityInputHandler for TextInput {
     fn text_for_range(&mut self, range: Range<usize>, _adjusted_range: &mut Option<Range<usize>>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<String> {
-        self.text.get(range).map(|s| s.to_string())
+        let start = self.utf16_to_offset(range.start);
+        let end = self.utf16_to_offset(range.end);
+        self.text.get(start..end).map(|s| s.to_string())
     }
 
     fn selected_text_range(&mut self, _ignore_disabled_input: bool, _window: &mut Window, _cx: &mut Context<Self>) -> Option<UTF16Selection> {
         let range = if let Some(r) = self.selection_range() {
-            r
+            self.offset_to_utf16(r.start)..self.offset_to_utf16(r.end)
         } else {
-            self.cursor_offset..self.cursor_offset
+            let offset = self.offset_to_utf16(self.cursor_offset);
+            offset..offset
         };
         Some(UTF16Selection {
             range,
@@ -539,8 +669,8 @@ impl EntityInputHandler for TextInput {
 
     fn replace_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(r) = range {
-            let start = r.start.min(self.text.len());
-            let end = r.end.min(self.text.len());
+            let start = self.utf16_to_offset(r.start);
+            let end = self.utf16_to_offset(r.end);
             if self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
                 self.text.replace_range(start..end, text);
                 self.cursor_offset = start + text.len();
@@ -1052,7 +1182,7 @@ impl MobieWorkspace {
                                     div()
                                         .text_sm()
                                         .text_color(text_col)
-                                        .whitespace_normal()
+                                        .whitespace_normal() // Ensure text wraps
                                         .child(msg.content.clone()),
                                 ),
                         )
@@ -1074,6 +1204,7 @@ impl MobieWorkspace {
                     .p(px(14.0))
                     .flex()
                     .items_center()
+                    .overflow_hidden()
                     .child(self.chat_input.clone())
                     .when(is_idle && !self.chat_input.read(cx).text().is_empty(), |d| {
                         d.child(
@@ -1208,6 +1339,7 @@ impl MobieWorkspace {
                     .p(px(12.0))
                     .border_1()
                     .border_color(rgb(0x2a2a4a))
+                    .overflow_hidden()
                     .child(input)
             )
     }
