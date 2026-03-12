@@ -1,6 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use tokio::sync::mpsc;
+use std::ops::Range;
 
 use crate::agent::{AgentMessage, AgentStatus, AgentUpdate};
 use crate::config::{save_config, AppConfig};
@@ -10,7 +11,25 @@ use crate::llm::LlmConfig;
 // Actions
 // ---------------------------------------------------------------------------
 
-actions!(mobie, [SendMessage, CancelGoal, NavigateSettings, NavigateChat, RefreshDevices, SaveSettings]);
+actions!(mobie, [
+    SendMessage, 
+    CancelGoal, 
+    NavigateSettings, 
+    NavigateChat, 
+    RefreshDevices, 
+    SaveSettings,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+    SelectAll,
+    Enter,
+    Copy,
+    Cut,
+    Paste
+]);
 
 // ---------------------------------------------------------------------------
 // Chat Message model
@@ -47,12 +66,420 @@ enum NavTabAction {
 }
 
 // ---------------------------------------------------------------------------
+// TextInput View
+// ---------------------------------------------------------------------------
+
+pub struct TextInput {
+    focus_handle: FocusHandle,
+    text: String,
+    cursor_offset: usize, // Byte offset
+    selection_anchor: Option<usize>, // Byte offset
+    placeholder: String,
+}
+
+impl TextInput {
+    fn new(cx: &mut Context<Self>, placeholder: String, initial_value: String) -> Self {
+        let len = initial_value.len();
+        Self {
+            focus_handle: cx.focus_handle(),
+            text: initial_value,
+            cursor_offset: len,
+            selection_anchor: None,
+            placeholder,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn selection_range(&self) -> Option<Range<usize>> {
+        let anchor = self.selection_anchor?;
+        if anchor < self.cursor_offset {
+            Some(anchor..self.cursor_offset)
+        } else if anchor > self.cursor_offset {
+            Some(self.cursor_offset..anchor)
+        } else {
+            None
+        }
+    }
+
+    fn backspace(&mut self, _: &Backspace, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(range) = self.selection_range() {
+            self.text.replace_range(range.clone(), "");
+            self.cursor_offset = range.start;
+            self.selection_anchor = None;
+        } else if self.cursor_offset > 0 {
+            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
+            if let Some((prev_offset, _)) = char_indices.next_back() {
+                self.text.replace_range(prev_offset..self.cursor_offset, "");
+                self.cursor_offset = prev_offset;
+            }
+        }
+        cx.notify();
+    }
+
+    fn delete(&mut self, _: &Delete, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(range) = self.selection_range() {
+            self.text.replace_range(range.clone(), "");
+            self.cursor_offset = range.start;
+            self.selection_anchor = None;
+        } else if self.cursor_offset < self.text.len() {
+            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
+            if let Some((next_offset, _)) = char_indices.next() {
+                self.text.replace_range(self.cursor_offset..next_offset, "");
+            } else {
+                self.text.replace_range(self.cursor_offset.., "");
+            }
+        }
+        cx.notify();
+    }
+
+    fn left(&mut self, _: &Left, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.cursor_offset > 0 {
+            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
+            if let Some((prev_offset, _)) = char_indices.next_back() {
+                self.cursor_offset = prev_offset;
+            }
+        }
+        self.selection_anchor = None;
+        cx.notify();
+    }
+
+    fn right(&mut self, _: &Right, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.cursor_offset < self.text.len() {
+            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
+            if let Some((next_offset, _)) = char_indices.next() {
+                self.cursor_offset = next_offset;
+            } else {
+                self.cursor_offset = self.text.len();
+            }
+        }
+        self.selection_anchor = None;
+        cx.notify();
+    }
+
+    fn home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor_offset = 0;
+        self.selection_anchor = None;
+        cx.notify();
+    }
+
+    fn end(&mut self, _: &End, _window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor_offset = self.text.len();
+        self.selection_anchor = None;
+        cx.notify();
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selection_anchor = Some(0);
+        self.cursor_offset = self.text.len();
+        cx.notify();
+    }
+
+    fn copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(range) = self.selection_range() {
+            cx.write_to_clipboard(ClipboardItem::new_string(self.text[range].to_string()));
+        }
+    }
+
+    fn cut(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(range) = self.selection_range() {
+            cx.write_to_clipboard(ClipboardItem::new_string(self.text[range.clone()].to_string()));
+            self.text.replace_range(range.clone(), "");
+            self.cursor_offset = range.start;
+            self.selection_anchor = None;
+            cx.notify();
+        }
+    }
+
+    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(item) = cx.read_from_clipboard() {
+            if let Some(text) = item.text() {
+                self.replace_text_in_range(self.selection_range(), &text, window, cx);
+            }
+        }
+    }
+
+    fn enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.dispatch_action(&SendMessage);
+    }
+
+    fn on_mouse_down(&mut self, _event: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle);
+    }
+}
+
+impl Render for TextInput {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focus_handle = self.focus_handle.clone();
+        
+        div()
+            .id("text-input")
+            .flex()
+            .items_center()
+            .flex_1()
+            .h_full()
+            .track_focus(&focus_handle)
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::enter))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .child(TextInputElement {
+                view: cx.entity().clone(),
+            })
+    }
+}
+
+struct TextInputElement {
+    view: Entity<TextInput>,
+}
+
+impl IntoElement for TextInputElement {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TextInputElement {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        app: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = window.line_height().into();
+        (window.request_layout(style, [], app), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _app: &mut App,
+    ) -> Self::PrepaintState {
+        ()
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let (text, is_focused, text_is_empty, cursor_offset, selection_range, focus_handle) = {
+            let state = self.view.read(cx);
+            (
+                if state.text.is_empty() {
+                    state.placeholder.clone()
+                } else {
+                    state.text.clone()
+                },
+                state.focus_handle.is_focused(window),
+                state.text.is_empty(),
+                state.cursor_offset,
+                state.selection_range(),
+                state.focus_handle.clone(),
+            )
+        };
+
+        let text_color = if text_is_empty {
+            rgb(0x555566)
+        } else {
+            rgb(0xeeeeff)
+        };
+
+        let font_size = px(14.0);
+        let shaped_line = window.text_system().shape_line(
+            text.clone().into(),
+            font_size,
+            &[TextRun {
+                len: text.len(),
+                color: text_color.into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+                font: window.text_style().font(),
+            }],
+            None
+        );
+
+        // Map mouse clicks to cursor position
+        window.on_mouse_event({
+            let view = self.view.clone();
+            let shaped_line = shaped_line.clone();
+            let focus_handle = focus_handle.clone();
+            let bounds = bounds;
+            move |event: &MouseDownEvent, phase, window, cx| {
+                if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
+                    window.focus(&focus_handle);
+                    let local_x = event.position.x - bounds.origin.x;
+                    if let Some(index) = shaped_line.index_for_x(local_x) {
+                        view.update(cx, |this, cx| {
+                            if event.modifiers.shift {
+                                if this.selection_anchor.is_none() {
+                                    this.selection_anchor = Some(this.cursor_offset);
+                                }
+                            } else {
+                                this.selection_anchor = None;
+                            }
+                            this.cursor_offset = index;
+                            cx.notify();
+                        });
+                    }
+                }
+            }
+        });
+
+        // Map mouse drag to selection
+        window.on_mouse_event({
+            let view = self.view.clone();
+            let shaped_line = shaped_line.clone();
+            let bounds = bounds;
+            move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && bounds.contains(&event.position) {
+                    let local_x = event.position.x - bounds.origin.x;
+                    if let Some(index) = shaped_line.index_for_x(local_x) {
+                        view.update(cx, |this, cx| {
+                            if this.selection_anchor.is_none() {
+                                this.selection_anchor = Some(this.cursor_offset);
+                            }
+                            this.cursor_offset = index;
+                            cx.notify();
+                        });
+                    }
+                }
+            }
+        });
+
+        // Paint selection highlight
+        if is_focused {
+            if let Some(ref range) = selection_range {
+                let start_x = shaped_line.x_for_index(range.start);
+                let end_x = shaped_line.x_for_index(range.end);
+                window.paint_quad(fill(
+                    Bounds {
+                        origin: point(bounds.origin.x + start_x, bounds.origin.y),
+                        size: size(end_x - start_x, window.line_height()),
+                    },
+                    rgba(0x4488cc44),
+                ));
+            }
+        }
+
+        let _ = shaped_line.paint(bounds.origin, window.line_height(), window, cx);
+
+        window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.view.clone()), cx);
+
+        if is_focused && selection_range.is_none() {
+            let cursor_x = shaped_line.x_for_index(cursor_offset);
+            window.paint_quad(fill(
+                Bounds {
+                    origin: point(bounds.origin.x + cursor_x, bounds.origin.y),
+                    size: size(px(2.0), window.line_height()),
+                },
+                rgb(0xe94560),
+            ));
+        }
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+}
+
+impl EntityInputHandler for TextInput {
+    fn text_for_range(&mut self, range: Range<usize>, _adjusted_range: &mut Option<Range<usize>>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<String> {
+        self.text.get(range).map(|s| s.to_string())
+    }
+
+    fn selected_text_range(&mut self, _ignore_disabled_input: bool, _window: &mut Window, _cx: &mut Context<Self>) -> Option<UTF16Selection> {
+        let range = if let Some(r) = self.selection_range() {
+            r
+        } else {
+            self.cursor_offset..self.cursor_offset
+        };
+        Some(UTF16Selection {
+            range,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+        None
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
+    fn replace_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(r) = range {
+            let start = r.start.min(self.text.len());
+            let end = r.end.min(self.text.len());
+            if self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
+                self.text.replace_range(start..end, text);
+                self.cursor_offset = start + text.len();
+                self.selection_anchor = None;
+            }
+        } else {
+            if self.text.is_char_boundary(self.cursor_offset) {
+                self.text.insert_str(self.cursor_offset, text);
+                self.cursor_offset += text.len();
+                self.selection_anchor = None;
+            } else {
+                self.cursor_offset = self.text.len();
+                self.text.push_str(text);
+                self.cursor_offset = self.text.len();
+                self.selection_anchor = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(&mut self, range: Option<Range<usize>>, new_text: &str, _new_selected_range: Option<Range<usize>>, window: &mut Window, cx: &mut Context<Self>) {
+        self.replace_text_in_range(range, new_text, window, cx);
+    }
+
+    fn bounds_for_range(&mut self, _range_utf16: Range<usize>, _element_bounds: Bounds<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+        None
+    }
+
+    fn character_index_for_point(&mut self, _point: Point<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MobieWorkspace – root GPUI view
 // ---------------------------------------------------------------------------
 
 pub struct MobieWorkspace {
     focus_handle: FocusHandle,
-    input_text: String,
     messages: Vec<ChatMessage>,
     agent_status: AgentStatus,
     cmd_tx: mpsc::Sender<AgentMessage>,
@@ -64,10 +491,11 @@ pub struct MobieWorkspace {
     devices: Vec<String>,
     selected_device: Option<String>,
 
-    // Settings fields (editable)
-    settings_api_key: String,
-    settings_model: String,
-    settings_base_url: String,
+    // Input fields
+    chat_input: Entity<TextInput>,
+    settings_api_key: Entity<TextInput>,
+    settings_model: Entity<TextInput>,
+    settings_base_url: Entity<TextInput>,
 }
 
 impl MobieWorkspace {
@@ -110,13 +538,13 @@ impl MobieWorkspace {
         })
         .detach();
 
-        let settings_api_key = initial_config.llm.api_key.clone();
-        let settings_model = initial_config.llm.model.clone();
-        let settings_base_url = initial_config.llm.base_url.clone();
+        let chat_input = cx.new(|cx| TextInput::new(cx, "Type a goal for the agent...".into(), String::new()));
+        let settings_api_key = cx.new(|cx| TextInput::new(cx, "sk-...".into(), initial_config.llm.api_key.clone()));
+        let settings_model = cx.new(|cx| TextInput::new(cx, "gpt-4o".into(), initial_config.llm.model.clone()));
+        let settings_base_url = cx.new(|cx| TextInput::new(cx, "https://api.openai.com/v1".into(), initial_config.llm.base_url.clone()));
 
         Self {
             focus_handle,
-            input_text: String::new(),
             messages: vec![ChatMessage {
                 role: ChatRole::System,
                 content: "Welcome to Mobie Studio! Type a goal and press Enter.".to_string(),
@@ -126,6 +554,7 @@ impl MobieWorkspace {
             current_view: AppView::Chat,
             devices: vec![],
             selected_device: None,
+            chat_input,
             settings_api_key,
             settings_model,
             settings_base_url,
@@ -142,7 +571,7 @@ impl MobieWorkspace {
     // -----------------------------------------------------------------------
 
     fn send_message(&mut self, _: &SendMessage, _window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.input_text.trim().to_string();
+        let text = self.chat_input.read(cx).text().trim().to_string();
         if text.is_empty() || self.agent_status != AgentStatus::Idle {
             return;
         }
@@ -150,7 +579,12 @@ impl MobieWorkspace {
             role: ChatRole::User,
             content: text.clone(),
         });
-        self.input_text.clear();
+        self.chat_input.update(cx, |input, cx| {
+            input.text.clear();
+            input.cursor_offset = 0;
+            input.selection_anchor = None;
+            cx.notify();
+        });
 
         let tx = self.cmd_tx.clone();
         cx.spawn(async move |_, _| {
@@ -196,11 +630,6 @@ impl MobieWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Trigger the agent engine to refresh devices by sending a dummy StartGoal
-        // (the engine does a refresh at startup; for runtime refresh we post a message)
-        // We signal refresh via SelectDevice("") which is ignored by engine but triggers the loop
-        // Better: the engine refreshes on demand via a dedicated Refresh message.
-        // For now, just prompt a UI message
         self.messages.push(ChatMessage {
             role: ChatRole::System,
             content: "Refreshing device list...".to_string(),
@@ -215,9 +644,9 @@ impl MobieWorkspace {
         cx: &mut Context<Self>,
     ) {
         let new_llm = LlmConfig {
-            api_key: self.settings_api_key.clone(),
-            model: self.settings_model.clone(),
-            base_url: self.settings_base_url.clone(),
+            api_key: self.settings_api_key.read(cx).text().to_string(),
+            model: self.settings_model.read(cx).text().to_string(),
+            base_url: self.settings_base_url.read(cx).text().to_string(),
             provider: "openai".to_string(),
         };
 
@@ -507,25 +936,8 @@ impl MobieWorkspace {
         chat_list
     }
 
-    fn render_input_area(&self) -> Div {
+    fn render_input_area(&self, _window: &Window, cx: &mut Context<Self>) -> Div {
         let is_idle = self.agent_status == AgentStatus::Idle;
-        let placeholder = if is_idle {
-            "Type a goal for the agent...".to_string()
-        } else {
-            "⏳ Agent is running...".to_string()
-        };
-
-        let display_text = if self.input_text.is_empty() {
-            placeholder
-        } else {
-            self.input_text.clone()
-        };
-
-        let text_color = if self.input_text.is_empty() {
-            rgb(0x555566)
-        } else {
-            rgb(0xeeeeff)
-        };
 
         div()
             .border_t_1()
@@ -538,14 +950,8 @@ impl MobieWorkspace {
                     .p(px(14.0))
                     .flex()
                     .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .text_color(text_color)
-                            .child(display_text),
-                    )
-                    .when(is_idle && !self.input_text.is_empty(), |d| {
+                    .child(self.chat_input.clone())
+                    .when(is_idle && !self.chat_input.read(cx).text().is_empty(), |d| {
                         d.child(
                             div()
                                 .text_xs()
@@ -560,7 +966,7 @@ impl MobieWorkspace {
     // Settings view
     // -----------------------------------------------------------------------
 
-    fn render_settings_panel(&self, cx: &mut Context<Self>) -> Div {
+    fn render_settings_panel(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         div()
             .flex_1()
             .h_full()
@@ -590,27 +996,21 @@ impl MobieWorkspace {
                     .gap(px(20.0))
                     .child(self.render_settings_field(
                         "API Key",
-                        "sk-...",
-                        // mask key for display
-                        if self.settings_api_key.is_empty() {
-                            "(not set)".to_string()
-                        } else {
-                            format!(
-                                "{}****",
-                                &self.settings_api_key
-                                    [..self.settings_api_key.len().min(6)]
-                            )
-                        },
+                        self.settings_api_key.clone(),
+                        window,
+                        cx,
                     ))
                     .child(self.render_settings_field(
                         "Model",
-                        "gpt-4o, claude-3-5-sonnet, ...",
                         self.settings_model.clone(),
+                        window,
+                        cx,
                     ))
                     .child(self.render_settings_field(
                         "Base URL",
-                        "https://api.openai.com/v1",
                         self.settings_base_url.clone(),
+                        window,
+                        cx,
                     ))
                     .child(
                         div()
@@ -620,7 +1020,7 @@ impl MobieWorkspace {
                             .rounded(px(8.0))
                             .text_xs()
                             .text_color(rgb(0x8899bb))
-                            .child("💡 To edit settings, use the keyboard when this panel is focused. Press Enter to save."),
+                            .child("💡 Click a field to focus and edit. Press Enter to save."),
                     ),
             )
             // Save button
@@ -665,18 +1065,7 @@ impl MobieWorkspace {
             )
     }
 
-    fn render_settings_field(&self, label: &str, placeholder: &str, value: String) -> Div {
-        let display = if value.is_empty() || value == "(not set)" {
-            placeholder.to_string()
-        } else {
-            value
-        };
-        let text_col = if display == placeholder {
-            rgb(0x555566)
-        } else {
-            rgb(0xeeeeff)
-        };
-
+    fn render_settings_field(&self, label: &str, input: Entity<TextInput>, _window: &Window, _cx: &mut Context<Self>) -> Div {
         div()
             .flex()
             .flex_col()
@@ -695,9 +1084,7 @@ impl MobieWorkspace {
                     .p(px(12.0))
                     .border_1()
                     .border_color(rgb(0x2a2a4a))
-                    .text_sm()
-                    .text_color(text_col)
-                    .child(display),
+                    .child(input)
             )
     }
 }
@@ -721,41 +1108,6 @@ impl Render for MobieWorkspace {
             .on_action(cx.listener(Self::navigate_settings))
             .on_action(cx.listener(Self::navigate_chat))
             .on_action(cx.listener(Self::save_settings))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                // Skip events consumed by modifier-only chords (ctrl/alt/cmd)
-                if event.keystroke.modifiers.control
-                    || event.keystroke.modifiers.alt
-                    || event.keystroke.modifiers.platform
-                {
-                    return;
-                }
-                let key = &event.keystroke.key;
-                // key_char is the actual character produced by the key + modifiers
-                // (e.g. "A" for shift-a, "ß" for option-s). Falls back to key for
-                // special keys like "backspace" that have no char.
-                let key_char = event.keystroke.key_char.as_deref();
-
-                match this.current_view {
-                    AppView::Chat => {
-                        if key == "backspace" {
-                            this.input_text.pop();
-                            cx.notify();
-                        } else if let Some(ch) = key_char {
-                            this.input_text.push_str(ch);
-                            cx.notify();
-                        }
-                    }
-                    AppView::Settings => {
-                        if key == "backspace" {
-                            this.settings_api_key.pop();
-                            cx.notify();
-                        } else if let Some(ch) = key_char {
-                            this.settings_api_key.push_str(ch);
-                            cx.notify();
-                        }
-                    }
-                }
-            }))
             .child(self.render_sidebar(cx))
             .child(match current_view {
                 AppView::Chat => div()
@@ -791,8 +1143,8 @@ impl Render for MobieWorkspace {
                             ),
                     )
                     .child(self.render_chat_area())
-                    .child(self.render_input_area()),
-                AppView::Settings => self.render_settings_panel(cx),
+                    .child(self.render_input_area(_window, cx)),
+                AppView::Settings => self.render_settings_panel(_window, cx),
             })
     }
 }
