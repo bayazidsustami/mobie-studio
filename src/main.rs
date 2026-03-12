@@ -1,21 +1,12 @@
-pub mod agent;
-pub mod config;
-pub mod device;
-pub mod llm;
-pub mod ui;
-pub mod yaml_exporter;
-
 use gpui::*;
-use tracing::info;
-
-use crate::agent::AgentEngine;
-use crate::config::load_config;
-use crate::ui::{
-    MobieWorkspace, Backspace, CancelGoal, Delete, Enter, SaveSettings,
-    SelectAll, SendMessage, Copy, Cut, Paste,
-    MoveLeft, MoveRight, MoveHome, MoveEnd,
-    SelectLeft, SelectRight, SelectHome, SelectEnd,
+use mobie::agent::AgentEngine;
+use mobie::config::load_config;
+use mobie::ui::{
+    Backspace, CancelGoal, Copy, Cut, Delete, Enter, MoveEnd, MoveHome, MoveLeft, MoveRight, Paste,
+    SaveSettings, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight, SendMessage,
+    MobieWorkspace,
 };
+use tracing::info;
 
 fn main() {
     // Initialize structured logging

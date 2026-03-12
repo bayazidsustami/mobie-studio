@@ -896,7 +896,10 @@ impl MobieWorkspace {
         };
 
         // Persist to disk
-        let cfg = AppConfig { llm: new_llm.clone() };
+        let cfg = AppConfig {
+            version: 1,
+            llm: new_llm.clone(),
+        };
         if let Err(e) = save_config(&cfg) {
             self.messages.push(ChatMessage {
                 role: ChatRole::System,
