@@ -980,7 +980,7 @@ impl MobieWorkspace {
 
                         msg_row.child(
                             div()
-                                .max_w(px(500.0))
+                                .w(px(500.0)) // Use fixed width to force wrapping
                                 .bg(bg)
                                 .rounded(px(12.0))
                                 .p(px(12.0))
@@ -996,14 +996,10 @@ impl MobieWorkspace {
                                 )
                                 .child(
                                     div()
-                                        .flex()
-                                        .flex_col()
-                                        .child(
-                                            msg.content.clone()
-                                        )
                                         .text_sm()
                                         .text_color(text_col)
-                                        .whitespace_normal(),
+                                        .whitespace_normal()
+                                        .child(msg.content.clone()),
                                 ),
                         )
                     }))
