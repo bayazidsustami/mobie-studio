@@ -319,8 +319,31 @@ impl AgentEngine {
                                 .await;
                         }
 
-                        // Wait for device UI to settle
-                        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                        // 5. VERIFY (Observe again to confirm state change)
+                        let _ = update_tx
+                            .send(AgentUpdate::StatusChanged(AgentStatus::Observing))
+                            .await;
+                        
+                        // Small sleep to let animations finish before verification
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+                        match device.observe_ui().await {
+                            Ok(xml_after) => {
+                                if xml_after == raw_xml {
+                                    warn!("UI state did not change after action");
+                                    let _ = update_tx
+                                        .send(AgentUpdate::AgentReply(
+                                            "🔍 UI state unchanged. Verification might need scroll or retry.".to_string(),
+                                        ))
+                                        .await;
+                                } else {
+                                    info!("UI state changed successfully");
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Verification observation failed: {}", e);
+                            }
+                        }
                     }
 
                     // YAML export on success
@@ -444,5 +467,28 @@ fn action_to_test_step(action: &Action) -> TestStep {
         action: action_name.to_string(),
         params,
         reasoning,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_action_to_test_step_preserves_sub_goal() {
+        let action = Action::Tap {
+            x: 100,
+            y: 200,
+            reasoning: "Reason".to_string(),
+            sub_goal: "SubGoal".to_string(),
+        };
+        let step = action_to_test_step(&action);
+        assert_eq!(step.action, "tap");
+        assert_eq!(step.reasoning, "Reason");
+        assert_eq!(step.params.get("sub_goal").unwrap().as_str().unwrap(), "SubGoal");
     }
 }
