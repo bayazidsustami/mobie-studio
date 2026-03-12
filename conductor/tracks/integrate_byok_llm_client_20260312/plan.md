@@ -7,9 +7,9 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Client Setup and Configuration' (Protocol in workflow.md)
 
 ## Phase 2: HTTP Client and Prompting
-- [ ] Task: Implement async HTTP client wrapper around `reqwest` targeting generic OpenAI API endpoints.
-    - [ ] Write Tests for HTTP request formatting
-    - [ ] Implement Feature
+- [x] Task: Implement async HTTP client wrapper around `reqwest` targeting generic OpenAI API endpoints. [707814a]
+    - [x] Write Tests for HTTP request formatting
+    - [x] Implement Feature
 - [ ] Task: Create prompt template module for compressing UI XML and injecting the user goal.
     - [ ] Write Tests for XML compression and templating
     - [ ] Implement Feature
