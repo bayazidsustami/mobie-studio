@@ -542,6 +542,7 @@ impl EntityInputHandler for TextInput {
 
 pub struct MobieWorkspace {
     focus_handle: FocusHandle,
+    chat_scroll_handle: ScrollHandle,
     messages: Vec<ChatMessage>,
     agent_status: AgentStatus,
     cmd_tx: mpsc::Sender<AgentMessage>,
@@ -568,6 +569,7 @@ impl MobieWorkspace {
         initial_config: AppConfig,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        let chat_scroll_handle = ScrollHandle::new();
 
         // Spawn async task to forward agent updates into GPUI entity
         cx.spawn(async move |this, cx| {
@@ -583,6 +585,7 @@ impl MobieWorkspace {
                                     role: ChatRole::Agent,
                                     content,
                                 });
+                                workspace.chat_scroll_handle.scroll_to_bottom();
                             }
                             AgentUpdate::DeviceList(devs) => {
                                 workspace.devices = devs;
@@ -607,6 +610,7 @@ impl MobieWorkspace {
 
         Self {
             focus_handle,
+            chat_scroll_handle,
             messages: vec![ChatMessage {
                 role: ChatRole::System,
                 content: "Welcome to Mobie Studio! Type a goal and press Enter.".to_string(),
@@ -641,6 +645,7 @@ impl MobieWorkspace {
             role: ChatRole::User,
             content: text.clone(),
         });
+        self.chat_scroll_handle.scroll_to_bottom();
         self.chat_input.update(cx, |input, cx| {
             input.text.clear();
             input.cursor_offset = 0;
@@ -941,61 +946,62 @@ impl MobieWorkspace {
     // -----------------------------------------------------------------------
 
     fn render_chat_area(&self) -> Div {
-        let mut chat_list = div()
+        div()
             .flex_1()
-            .p(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .overflow_hidden();
+            .child(
+                div()
+                    .id("chat-list")
+                    .size_full()
+                    .p(px(16.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.chat_scroll_handle)
+                    .children(self.messages.iter().map(|msg| {
+                        let (bg, text_col, is_user) = match msg.role {
+                            ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff), true),
+                            ChatRole::Agent => (rgb(0x0f3460), rgb(0xccddff), false),
+                            ChatRole::System => (rgb(0x2a2a4a), rgb(0x888899), false),
+                        };
 
-        for msg in &self.messages {
-            let (bg, text_col, is_user) = match msg.role {
-                ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff), true),
-                ChatRole::Agent => (rgb(0x0f3460), rgb(0xccddff), false),
-                ChatRole::System => (rgb(0x2a2a4a), rgb(0x888899), false),
-            };
+                        let label = match msg.role {
+                            ChatRole::User => "You",
+                            ChatRole::Agent => "Agent",
+                            ChatRole::System => "System",
+                        };
 
-            let label = match msg.role {
-                ChatRole::User => "You",
-                ChatRole::Agent => "Agent",
-                ChatRole::System => "System",
-            };
+                        let msg_row = if is_user {
+                            div().flex().flex_row_reverse()
+                        } else {
+                            div().flex()
+                        };
 
-            let msg_row = if is_user {
-                div().flex().flex_row_reverse()
-            } else {
-                div().flex()
-            };
-
-            chat_list = chat_list.child(
-                msg_row.child(
-                    div()
-                        .max_w(px(500.0))
-                        .bg(bg)
-                        .rounded(px(12.0))
-                        .p(px(12.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.0))
-                        .child(
+                        msg_row.child(
                             div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0x666688))
-                                .child(label.to_string()),
+                                .max_w(px(500.0))
+                                .bg(bg)
+                                .rounded(px(12.0))
+                                .p(px(12.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(0x666688))
+                                        .child(label.to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(text_col)
+                                        .child(msg.content.clone()),
+                                ),
                         )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(text_col)
-                                .child(msg.content.clone()),
-                        ),
-                ),
-            );
-        }
-
-        chat_list
+                    }))
+            )
     }
 
     fn render_input_area(&self, _window: &Window, cx: &mut Context<Self>) -> Div {
