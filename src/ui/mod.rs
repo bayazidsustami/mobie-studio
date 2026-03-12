@@ -626,12 +626,18 @@ impl MobieWorkspace {
                                 workspace.chat_scroll_handle.scroll_to_bottom();
                             }
                             AgentUpdate::DeviceList(devs) => {
+                                let count = devs.len();
                                 workspace.devices = devs;
                                 // Auto-select first device if none selected
                                 if workspace.selected_device.is_none() {
                                     workspace.selected_device =
                                         workspace.devices.first().cloned();
                                 }
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!("✅ Found {} device(s).", count),
+                                });
+                                workspace.chat_scroll_handle.scroll_to_bottom();
                             }
                         }
                         cx.notify();
