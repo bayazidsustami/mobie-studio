@@ -10,9 +10,9 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Observation & History Enhancement' (Protocol in workflow.md)
 
 ## Phase 2: Planning & Reasoning Logic
-- [ ] Task: Update system prompt in `src/llm/prompt.rs` to support planning and history context.
-    - [ ] Write Tests for prompt template with history and plan context
-    - [ ] Implement Feature
+- [x] Task: Update system prompt in `src/llm/prompt.rs` to support planning and history context. [e0a9737]
+    - [x] Write Tests for prompt template with history and plan context
+    - [x] Implement Feature
 - [ ] Task: Refactor `AgentEngine` loop in `src/agent/mod.rs` to handle multi-step planning and explicit verification cycles.
     - [ ] Write Tests for planning and verification state machine
     - [ ] Implement Feature
