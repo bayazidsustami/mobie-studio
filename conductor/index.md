@@ -12,3 +12,6 @@
 ## Management
 - [Tracks Registry](./tracks.md)
 - [Tracks Directory](./tracks/)
+
+## Active Tracks
+- [Fix Chat Input Lag and Selection Issue](./tracks/fix-chat-input-lag_20260313/)
