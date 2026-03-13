@@ -1,8 +1,3 @@
-use rig::providers::openai;
-use rig::agent::Agent;
-use rig::completion::Prompt;
-use rig::client::CompletionClient;
-
 pub struct RigAgent {
     // For now, we'll hardcode the OpenAI client/agent for simplicity.
     // In Phase 4, we'll make this configurable for OpenRouter.
