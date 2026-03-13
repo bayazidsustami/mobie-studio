@@ -1,8 +1,0 @@
-{
-  "track_id": "migrate_core_agent_rig_20260313",
-  "type": "feature",
-  "status": "new",
-  "created_at": "2026-03-13T10:00:00Z",
-  "updated_at": "2026-03-13T10:00:00Z",
-  "description": "migrate the core agent using Rig rust, you can se use context7 to get docs refference and use @rust-pro to follow rust standart. keep in mind we just need to migrate the core agent."
-}
