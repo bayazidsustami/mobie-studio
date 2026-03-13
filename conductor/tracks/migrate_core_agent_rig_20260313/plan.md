@@ -30,14 +30,14 @@ Migrate the existing custom agent loop to the **Rig** framework, using a Rig-nat
     - [x] Ensure existing `Observe` and `Act` calls can be triggered.
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Core Agent Re-architecture' (Protocol in workflow.md) (c85798c)
 
-## Phase 3: Tooling & Action Mapping
-- [ ] Task: Map ADB Actions to Rig Tools
-    - [ ] Implement Rig's `Tool` trait for existing actions (click, type, etc.).
-    - [ ] Write failing tests for tool execution via Rig agent.
-- [ ] Task: Map XML Observation to Rig Tools
-    - [ ] Wrap the `xml_parser` logic into a Rig tool for the agent to "Observe".
-    - [ ] Verify the agent can use the "Observe" tool to see the screen state.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Tooling & Action Mapping' (Protocol in workflow.md)
+## Phase 3: Tooling & Action Mapping [checkpoint: b8e384c]
+- [x] Task: Map ADB Actions to Rig Tools (99ef8d1)
+    - [x] Implement Rig's `Tool` trait for existing actions (click, type, etc.).
+    - [x] Write failing tests for tool execution via Rig agent.
+- [x] Task: Map XML Observation to Rig Tools (5cf1c94)
+    - [x] Wrap the `xml_parser` logic into a Rig tool for the agent to "Observe".
+    - [x] Verify the agent can use the "Observe" tool to see the screen state.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Tooling & Action Mapping' (Protocol in workflow.md) (b8e384c)
 
 ## Phase 4: OpenRouter Integration & Final Validation
 - [ ] Task: Configure OpenRouter Provider via Rig
