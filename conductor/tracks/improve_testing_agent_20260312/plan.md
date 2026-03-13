@@ -19,9 +19,9 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Planning & Reasoning Logic' (Protocol in workflow.md)
 
 ## Phase 3: Robust Interaction Patterns
-- [ ] Task: Implement logic to detect and wait for dynamic loading states (spinners, etc.) in `AgentEngine`.
-    - [ ] Write Tests for dynamic wait logic
-    - [ ] Implement Feature
+- [x] Task: Implement logic to detect and wait for dynamic loading states (spinners, etc.) in `AgentEngine`. [f60d293]
+    - [x] Write Tests for dynamic wait logic
+    - [x] Implement Feature
 - [ ] Task: Improve element targeting and scroll logic for long lists in `src/device/mod.rs`.
     - [ ] Write Tests for list navigation
     - [ ] Implement Feature
