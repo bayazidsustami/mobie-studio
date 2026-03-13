@@ -9,7 +9,6 @@ use tracing::{error, info, warn};
 use crate::config::AppConfig;
 use crate::device::DeviceBridge;
 use crate::llm::LlmConfig;
-use crate::yaml_exporter::{export, TestCase, TestStep};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -45,53 +44,6 @@ pub enum AgentUpdate {
     DeviceList(Vec<String>),
 }
 
-/// Maximum iterations per goal to prevent infinite loops.
-const MAX_ITERATIONS: usize = 20;
-
-// ---------------------------------------------------------------------------
-// Session History
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct SessionHistory {
-    actions: Vec<Action>,
-    limit: usize,
-}
-
-impl SessionHistory {
-    pub fn new(limit: usize) -> Self {
-        Self {
-            actions: Vec::new(),
-            limit,
-        }
-    }
-
-    pub fn push(&mut self, action: Action) {
-        if self.actions.len() >= self.limit {
-            self.actions.remove(0);
-        }
-        self.actions.push(action);
-    }
-
-    pub fn get_recent(&self, count: usize) -> &[Action] {
-        let start = self.actions.len().saturating_sub(count);
-        &self.actions[start..]
-    }
-
-    /// Simple loop detection: check if the last action is the same as the one before it.
-    /// This can be expanded to check longer patterns.
-    pub fn is_looping(&self) -> bool {
-        if self.actions.len() < 2 {
-            return false;
-        }
-        let last = &self.actions[self.actions.len() - 1];
-        let prev = &self.actions[self.actions.len() - 2];
-
-        // For now, compare Display output as a proxy for identity
-        last.to_string() == prev.to_string()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Agent Engine
 // ---------------------------------------------------------------------------
@@ -118,7 +70,7 @@ impl AgentEngine {
         // Load persisted config on startup (or could receive via channel from main)
         let app_config = crate::config::load_config();
         let mut device = DeviceBridge::new();
-        let mut rig_agent = rig_agent::RigAgent::new(app_config.llm.clone());
+        let mut rig_agent = rig_agent::RigAgent::new(app_config.llm.clone(), device.clone());
 
         info!("Agent Engine started. Waiting for goals...");
         let _ = update_tx
@@ -135,7 +87,7 @@ impl AgentEngine {
                 // ----------------------------------------------------------------
                 AgentMessage::UpdateConfig(new_cfg) => {
                     info!("Config updated: model={}", new_cfg.model);
-                    rig_agent = rig_agent::RigAgent::new(new_cfg);
+                    rig_agent = rig_agent::RigAgent::new(new_cfg, device.clone());
                 }
                 AgentMessage::SelectDevice(id) => {
                     info!("Device selected: {}", id);
@@ -179,217 +131,29 @@ impl AgentEngine {
                         )))
                         .await;
 
-                    // Accumulate steps for YAML export
-                    let mut recorded_steps: Vec<TestStep> = Vec::new();
-                    let mut iteration = 0usize;
-                    let mut goal_success = false;
-                    let mut history = SessionHistory::new(5);
-                    let mut current_sub_goal: Option<String> = None;
+                    let _ = update_tx
+                        .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
+                        .await;
 
-                    'agent_loop: loop {
-                        iteration += 1;
-                        if iteration > MAX_ITERATIONS {
-                            warn!("Max iterations ({}) reached for goal", MAX_ITERATIONS);
+                    match rig_agent.think(&goal).await {
+                        Ok(res) => {
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!(
-                                    "⚠️ Stopped after {} iterations — goal may not be achievable.",
-                                    MAX_ITERATIONS
-                                )))
-                                .await;
-                            break;
-                        }
-
-                        info!("--- Iteration {}/{} ---", iteration, MAX_ITERATIONS);
-
-                        // 1. OBSERVE
-                        let _ = update_tx
-                            .send(AgentUpdate::StatusChanged(AgentStatus::Observing))
-                            .await;
-
-                        let mut raw_xml = match device.observe_ui().await {
-                            Ok(xml) => xml,
-                            Err(e) => {
-                                error!("Observe failed: {}", e);
-                                let _ = update_tx
-                                    .send(AgentUpdate::StatusChanged(AgentStatus::Error(
-                                        e.to_string(),
-                                    )))
-                                    .await;
-                                let _ = update_tx
-                                    .send(AgentUpdate::AgentReply(format!(
-                                        "❌ Failed to observe UI: {}",
-                                        e
-                                    )))
-                                    .await;
-                                break;
-                            }
-                        };
-
-                        // Check if a Stop was sent during observe
-                        if let Ok(AgentMessage::Stop) = cmd_rx.try_recv() {
-                            let _ = update_tx
-                                .send(AgentUpdate::AgentReply("⏹ Goal cancelled.".to_string()))
-                                .await;
-                            break 'agent_loop;
-                        }
-
-                        // NEW: Robust Interaction - Wait for dynamic loading states
-                        Self::wait_for_idle(&device, &update_tx, &mut raw_xml).await;
-
-                        // 2. THINK
-                        let _ = update_tx
-                            .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
-                            .await;
-
-                        // Transition: Use RigAgent for thinking phase.
-                        // For now, we'll pass a combined prompt.
-                        // In later phases, this will be handled by Rig tools.
-                        let prompt_text = format!(
-                            "Goal: {}\nSub-goal: {:?}\nUI State: {}\nRecent History: {:?}",
-                            goal, current_sub_goal, raw_xml, history.get_recent(5)
-                        );
-
-                        let raw_response = match rig_agent.prompt(&prompt_text).await {
-                            Ok(res) => res,
-                            Err(e) => {
-                                error!("Rig think failed: {}", e);
-                                let _ = update_tx
-                                    .send(AgentUpdate::StatusChanged(AgentStatus::Error(
-                                        e.to_string(),
-                                    )))
-                                    .await;
-                                let _ = update_tx
-                                    .send(AgentUpdate::AgentReply(format!("❌ Agent error: {}", e)))
-                                    .await;
-                                break;
-                            }
-                        };
-
-                        // Transition: Parse the raw response into an Action.
-                        // For Phase 2, we'll use a placeholder parser or keep it simple.
-                        // In Phase 3, we'll use Rig's structured output.
-                        let action = match serde_json::from_str::<Action>(&raw_response) {
-                            Ok(a) => a,
-                            Err(_) => {
-                                // Fallback for mock/placeholder responses
-                                Action::Done {
-                                    success: true,
-                                    reason: format!("Processed via Rig: {}", raw_response),
-                                }
-                            }
-                        };
-
-                        // Update current sub-goal from LLM response
-                        if let Some(new_sub) = action.sub_goal() {
-                            if Some(new_sub) != current_sub_goal.as_deref() {
-                                info!("New sub-goal: {}", new_sub);
-                                current_sub_goal = Some(new_sub.to_string());
-                            }
-                        }
-
-                        info!("Action decided: {}", action);
-                        let _ = update_tx
-                            .send(AgentUpdate::AgentReply(format!(
-                                "🤖 Step {}: {}",
-                                iteration, action
-                            )))
-                            .await;
-
-                        // 3. DONE check
-                        if let Action::Done { success, reason } = &action {
-                            let emoji = if *success { "✅" } else { "❌" };
-                            let _ = update_tx
-                                .send(AgentUpdate::AgentReply(format!(
-                                    "{} Goal completed: {}",
-                                    emoji, reason
-                                )))
-                                .await;
-                            goal_success = *success;
-                            break;
-                        }
-
-                        // Check for loops
-                        history.push(action.clone());
-                        if history.is_looping() {
-                            warn!("Loop detected — agent is repeating actions");
-                            let _ = update_tx
-                                .send(AgentUpdate::AgentReply(
-                                    "⚠️ Loop detected. Retrying with history awareness...".to_string(),
-                                ))
-                                .await;
-                        }
-
-                        // Record this step
-                        let step = action_to_test_step(&action);
-                        recorded_steps.push(step);
-
-                        // 4. ACT
-                        let _ = update_tx
-                            .send(AgentUpdate::StatusChanged(AgentStatus::Acting))
-                            .await;
-
-                        if let Err(e) = device.execute_action(&action).await {
-                            error!("Action execution failed: {}", e);
-                            let _ = update_tx
-                                .send(AgentUpdate::AgentReply(format!(
-                                    "⚠️ Action failed: {} — retrying...",
-                                    e
+                                    "✅ Goal completed: {}",
+                                    res
                                 )))
                                 .await;
                         }
-
-                        // 5. VERIFY (Observe again to confirm state change)
-                        let _ = update_tx
-                            .send(AgentUpdate::StatusChanged(AgentStatus::Observing))
-                            .await;
-                        
-                        // Small sleep to let animations finish before verification
-                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
-                        match device.observe_ui().await {
-                            Ok(xml_after) => {
-                                if xml_after == raw_xml {
-                                    warn!("UI state did not change after action");
-                                    let _ = update_tx
-                                        .send(AgentUpdate::AgentReply(
-                                            "🔍 UI state unchanged. Verification might need scroll or retry.".to_string(),
-                                        ))
-                                        .await;
-                                } else {
-                                    info!("UI state changed successfully");
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Verification observation failed: {}", e);
-                            }
-                        }
-                    }
-
-                    // YAML export on success
-                    if goal_success && !recorded_steps.is_empty() {
-                        let test_case = TestCase {
-                            goal: goal.clone(),
-                            steps: recorded_steps,
-                            success: true,
-                        };
-                        match export(&test_case) {
-                            Ok(path) => {
-                                let _ = update_tx
-                                    .send(AgentUpdate::AgentReply(format!(
-                                        "📄 Test case exported: {}",
-                                        path.display()
-                                    )))
-                                    .await;
-                            }
-                            Err(e) => {
-                                warn!("YAML export failed: {}", e);
-                                let _ = update_tx
-                                    .send(AgentUpdate::AgentReply(format!(
-                                        "⚠️ YAML export failed: {}",
-                                        e
-                                    )))
-                                    .await;
-                            }
+                        Err(e) => {
+                            error!("Rig think failed: {}", e);
+                            let _ = update_tx
+                                .send(AgentUpdate::StatusChanged(AgentStatus::Error(
+                                    e.to_string(),
+                                )))
+                                .await;
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(format!("❌ Agent error: {}", e)))
+                                .await;
                         }
                     }
 
@@ -416,126 +180,6 @@ impl AgentEngine {
             }
         }
     }
-
-    /// Robust Interaction - detect and wait for dynamic loading states (spinners, etc.)
-    async fn wait_for_idle(
-        device: &DeviceBridge,
-        update_tx: &mpsc::Sender<AgentUpdate>,
-        current_xml: &mut String,
-    ) {
-        if !crate::device::xml_parser::is_loading(current_xml) {
-            return;
-        }
-
-        info!("Loading detected, waiting for idle...");
-        let _ = update_tx
-            .send(AgentUpdate::AgentReply(
-                "⏳ Loading detected, waiting for UI to stabilize...".to_string(),
-            ))
-            .await;
-
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(15);
-        let poll_interval = std::time::Duration::from_millis(1500);
-        let mut poll_count = 0;
-        let max_polls = 10;
-
-        while crate::device::xml_parser::is_loading(current_xml)
-            && start.elapsed() < timeout
-            && poll_count < max_polls
-        {
-            poll_count += 1;
-            tokio::time::sleep(poll_interval).await;
-            match device.observe_ui().await {
-                Ok(xml) => *current_xml = xml,
-                Err(e) => {
-                    warn!("Observe failed during wait_for_idle: {}", e);
-                    break;
-                }
-            }
-        }
-
-        if crate::device::xml_parser::is_loading(current_xml) {
-            warn!("Wait for idle timed out after {}s", timeout.as_secs());
-        } else {
-            info!("UI stabilized. Proceeding.");
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Convert an `Action` into a `TestStep` for YAML recording.
-fn action_to_test_step(action: &Action) -> TestStep {
-    use serde_json::json;
-    let (action_name, params, reasoning) = match action {
-        Action::Tap {
-            x,
-            y,
-            reasoning,
-            sub_goal,
-        } => {
-            let mut p = std::collections::HashMap::new();
-            p.insert("x".to_string(), json!(x));
-            p.insert("y".to_string(), json!(y));
-            p.insert("sub_goal".to_string(), json!(sub_goal));
-            ("tap", p, reasoning.clone())
-        }
-        Action::Input {
-            text,
-            reasoning,
-            sub_goal,
-        } => {
-            let mut p = std::collections::HashMap::new();
-            p.insert("text".to_string(), json!(text));
-            p.insert("sub_goal".to_string(), json!(sub_goal));
-            ("input", p, reasoning.clone())
-        }
-        Action::Swipe {
-            direction,
-            x,
-            y,
-            distance,
-            reasoning,
-            sub_goal,
-        } => {
-            let mut p = std::collections::HashMap::new();
-            p.insert(
-                "direction".to_string(),
-                json!(format!("{:?}", direction).to_lowercase()),
-            );
-            p.insert("x".to_string(), json!(x));
-            p.insert("y".to_string(), json!(y));
-            if let Some(d) = distance {
-                p.insert("distance".to_string(), json!(d));
-            }
-            p.insert("sub_goal".to_string(), json!(sub_goal));
-            ("swipe", p, reasoning.clone())
-        }
-        Action::KeyEvent {
-            code,
-            reasoning,
-            sub_goal,
-        } => {
-            let mut p = std::collections::HashMap::new();
-            p.insert("code".to_string(), json!(code));
-            p.insert("sub_goal".to_string(), json!(sub_goal));
-            ("key_event", p, reasoning.clone())
-        }
-        Action::Done { .. } => (
-            "done",
-            std::collections::HashMap::new(),
-            String::new(),
-        ),
-    };
-
-    TestStep {
-        action: action_name.to_string(),
-        params,
-        reasoning,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -547,25 +191,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_action_to_test_step_preserves_sub_goal() {
-        let action = Action::Tap {
-            x: 100,
-            y: 200,
-            reasoning: "Reason".to_string(),
-            sub_goal: "SubGoal".to_string(),
-        };
-        let step = action_to_test_step(&action);
-        assert_eq!(step.action, "tap");
-        assert_eq!(step.reasoning, "Reason");
-        assert_eq!(step.params.get("sub_goal").unwrap().as_str().unwrap(), "SubGoal");
-    }
-
-    #[tokio::test]
     async fn test_agent_engine_uses_rig_agent() {
         // This is a placeholder test to drive the integration.
         // We'll check if RigAgent can be used within the engine context.
         let config = LlmConfig::default();
-        let _rig = rig_agent::RigAgent::new(config);
+        let _rig = rig_agent::RigAgent::new(config, DeviceBridge::new());
         // The real verification will be in the implementation of run_loop.
         assert!(true);
     }

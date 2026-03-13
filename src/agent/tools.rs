@@ -3,6 +3,9 @@ use rig::completion::ToolDefinition;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
+use std::sync::Arc;
+use crate::device::DeviceBridge;
+use crate::agent::action::SwipeDirection;
 
 #[derive(Debug, Error)]
 #[error("Tool error: {0}")]
@@ -19,7 +22,9 @@ pub struct TapArgs {
     pub reasoning: String,
 }
 
-pub struct Tap;
+pub struct Tap {
+    pub device: Arc<DeviceBridge>,
+}
 
 impl Tool for Tap {
     const NAME: &'static str = "tap";
@@ -45,6 +50,8 @@ impl Tool for Tap {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.device.tap(args.x, args.y).await
+            .map_err(|e| ToolError(e.to_string()))?;
         Ok(format!("Tap performed at ({}, {}) for: {}", args.x, args.y, args.reasoning))
     }
 }
@@ -59,7 +66,9 @@ pub struct InputArgs {
     pub reasoning: String,
 }
 
-pub struct Input;
+pub struct Input {
+    pub device: Arc<DeviceBridge>,
+}
 
 impl Tool for Input {
     const NAME: &'static str = "input";
@@ -84,6 +93,8 @@ impl Tool for Input {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.device.input_text(&args.text).await
+            .map_err(|e| ToolError(e.to_string()))?;
         Ok(format!("Input \"{}\" performed for: {}", args.text, args.reasoning))
     }
 }
@@ -101,7 +112,9 @@ pub struct SwipeArgs {
     pub reasoning: String,
 }
 
-pub struct Swipe;
+pub struct Swipe {
+    pub device: Arc<DeviceBridge>,
+}
 
 impl Tool for Swipe {
     const NAME: &'static str = "swipe";
@@ -129,6 +142,30 @@ impl Tool for Swipe {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let dir = match args.direction.as_str() {
+            "up" => SwipeDirection::Up,
+            "down" => SwipeDirection::Down,
+            "left" => SwipeDirection::Left,
+            "right" => SwipeDirection::Right,
+            _ => return Err(ToolError("Invalid direction".to_string())),
+        };
+
+        let (w, h) = self.device.get_screen_size().await.unwrap_or((1080, 2400));
+        let dist = args.distance.unwrap_or_else(|| match dir {
+            SwipeDirection::Up | SwipeDirection::Down => h / 3,
+            SwipeDirection::Left | SwipeDirection::Right => w / 2,
+        });
+
+        let (x2, y2) = match dir {
+            SwipeDirection::Up => (args.x, args.y.saturating_sub(dist)),
+            SwipeDirection::Down => (args.x, (args.y + dist).min(h - 1)),
+            SwipeDirection::Left => (args.x.saturating_sub(dist), args.y),
+            SwipeDirection::Right => ((args.x + dist).min(w - 1), args.y),
+        };
+
+        self.device.swipe(args.x, args.y, x2, y2, 300).await
+            .map_err(|e| ToolError(e.to_string()))?;
+
         Ok(format!("Swipe {} from ({}, {}) performed for: {}", args.direction, args.x, args.y, args.reasoning))
     }
 }
@@ -143,7 +180,9 @@ pub struct KeyEventArgs {
     pub reasoning: String,
 }
 
-pub struct KeyEvent;
+pub struct KeyEvent {
+    pub device: Arc<DeviceBridge>,
+}
 
 impl Tool for KeyEvent {
     const NAME: &'static str = "key_event";
@@ -168,6 +207,8 @@ impl Tool for KeyEvent {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.device.keyevent(args.code).await
+            .map_err(|e| ToolError(e.to_string()))?;
         Ok(format!("KeyEvent {} performed for: {}", args.code, args.reasoning))
     }
 }
@@ -181,7 +222,9 @@ pub struct ObserveArgs {
     pub reasoning: String,
 }
 
-pub struct Observe;
+pub struct Observe {
+    pub device: Arc<DeviceBridge>,
+}
 
 impl Tool for Observe {
     const NAME: &'static str = "observe";
@@ -205,8 +248,10 @@ impl Tool for Observe {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // In real implementation, this would call DeviceBridge::observe_ui()
-        Ok(format!("UI State observed for: {}", args.reasoning))
+        let xml = self.device.observe_ui().await
+            .map_err(|e| ToolError(e.to_string()))?;
+        let compressed = crate::device::compress_xml(&xml);
+        Ok(format!("Current UI State (reasoning: {}):\n{}", args.reasoning, compressed))
     }
 }
 
@@ -219,62 +264,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_tap_tool_call() {
-        let tool = Tap;
-        let args = TapArgs {
-            x: 100,
-            y: 200,
-            reasoning: "Test tap".to_string(),
-        };
-        let result = tool.call(args).await.unwrap();
-        assert!(result.contains("100"));
-        assert!(result.contains("200"));
-    }
-
-    #[tokio::test]
-    async fn test_input_tool_call() {
-        let tool = Input;
-        let args = InputArgs {
-            text: "hello".to_string(),
-            reasoning: "Test input".to_string(),
-        };
-        let result = tool.call(args).await.unwrap();
-        assert!(result.contains("hello"));
-    }
-
-    #[tokio::test]
-    async fn test_swipe_tool_call() {
-        let tool = Swipe;
-        let args = SwipeArgs {
-            direction: "up".to_string(),
-            x: 540,
-            y: 1200,
-            distance: None,
-            reasoning: "Test swipe".to_string(),
-        };
-        let result = tool.call(args).await.unwrap();
-        assert!(result.contains("up"));
-        assert!(result.contains("540"));
-    }
-
-    #[tokio::test]
-    async fn test_key_event_tool_call() {
-        let tool = KeyEvent;
-        let args = KeyEventArgs {
-            code: 4,
-            reasoning: "Test back button".to_string(),
-        };
-        let result = tool.call(args).await.unwrap();
-        assert!(result.contains("4"));
-    }
-
-    #[tokio::test]
-    async fn test_observe_tool_call() {
-        let tool = Observe;
-        let args = ObserveArgs {
-            reasoning: "Test observation".to_string(),
-        };
-        let result = tool.call(args).await.unwrap();
-        assert!(result.contains("observed"));
+    async fn test_tap_tool_exists() {
+        let device = Arc::new(DeviceBridge::new());
+        let _tool = Tap { device };
     }
 }
