@@ -54,128 +54,108 @@ pub struct ChatMessage {
 }
 
 // ---------------------------------------------------------------------------
-// View enum
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AppView {
-    Chat,
-    Settings,
-}
-
-/// Used by nav tab click handlers to dispatch the correct navigation action
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum NavTabAction {
-    Chat,
-    Settings,
-}
-
-// ---------------------------------------------------------------------------
 // TextInput View
 // ---------------------------------------------------------------------------
+
+use std::cell::RefCell;
 
 pub struct TextInput {
     focus_handle: FocusHandle,
     text: String,
-    cursor_offset: usize, // Byte offset
-    selection_anchor: Option<usize>, // Byte offset
+    cursor_offset: usize, // Character offset
+    selection_anchor: Option<usize>, // Character offset
     placeholder: String,
     is_masked: bool,
     
-    // Caching for performance
-    last_wrapped_lines: Option<(String, Pixels, SmallVec<[WrappedLine; 1]>)>,
+    // Caching for performance - using RefCell to allow updating from read() context
+    last_wrapped_lines: RefCell<Option<(String, Pixels, SmallVec<[WrappedLine; 1]>)>>,
+    last_layout_width: RefCell<Option<Pixels>>,
 }
 
 impl TextInput {
-    fn new(cx: &mut Context<Self>, placeholder: String, initial_value: String) -> Self {
-        let len = initial_value.len();
+    pub fn new(cx: &mut Context<Self>, placeholder: String, initial_value: String) -> Self {
+        let char_len = initial_value.chars().count();
         Self {
             focus_handle: cx.focus_handle(),
             text: initial_value,
-            cursor_offset: len,
+            cursor_offset: char_len,
             selection_anchor: None,
             placeholder,
             is_masked: false,
-            last_wrapped_lines: None,
+            last_wrapped_lines: RefCell::new(None),
+            last_layout_width: RefCell::new(None),
         }
     }
 
     pub fn set_masked(&mut self, masked: bool) {
         self.is_masked = masked;
-        self.last_wrapped_lines = None;
+        self.invalidate_cache();
     }
 
     pub fn text(&self) -> &str {
         &self.text
     }
 
-    fn selection_range(&self) -> Option<Range<usize>> {
+    pub fn selection_range(&self) -> Option<Range<usize>> {
         let anchor = self.selection_anchor?;
         let start = anchor.min(self.cursor_offset);
         let end = anchor.max(self.cursor_offset);
         
-        if self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
-            if start != end {
-                return Some(start..end);
-            }
+        if start != end {
+            return Some(start..end);
         }
         None
     }
 
-    fn offset_to_utf16(&self, offset: usize) -> usize {
-        let offset = offset.min(self.text.len());
-        self.text[..offset].encode_utf16().count()
+    fn byte_offset_for_char_offset(&self, char_offset: usize) -> usize {
+        self.text.char_indices().map(|(i, _)| i).nth(char_offset).unwrap_or(self.text.len())
     }
 
-    fn utf16_to_offset(&self, utf16_offset: usize) -> usize {
-        let mut current_utf16 = 0;
-        for (byte_offset, c) in self.text.char_indices() {
-            if current_utf16 >= utf16_offset {
-                return byte_offset;
-            }
-            current_utf16 += c.len_utf16();
-        }
-        self.text.len()
+    fn char_offset_for_byte_offset(&self, byte_offset: usize) -> usize {
+        self.text.char_indices().take_while(|(i, _)| *i < byte_offset).count()
+    }
+
+    fn invalidate_cache(&self) {
+        *self.last_wrapped_lines.borrow_mut() = None;
     }
 
     fn backspace(&mut self, _: &Backspace, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(range) = self.selection_range() {
-            self.text.replace_range(range.clone(), "");
+            let start_byte = self.byte_offset_for_char_offset(range.start);
+            let end_byte = self.byte_offset_for_char_offset(range.end);
+            self.text.replace_range(start_byte..end_byte, "");
             self.cursor_offset = range.start;
             self.selection_anchor = None;
         } else if self.cursor_offset > 0 {
-            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
-            if let Some((prev_offset, _)) = char_indices.next_back() {
-                self.text.replace_range(prev_offset..self.cursor_offset, "");
-                self.cursor_offset = prev_offset;
-            }
+            let start_byte = self.byte_offset_for_char_offset(self.cursor_offset - 1);
+            let end_byte = self.byte_offset_for_char_offset(self.cursor_offset);
+            self.text.replace_range(start_byte..end_byte, "");
+            self.cursor_offset -= 1;
         }
+        self.invalidate_cache();
         cx.notify();
     }
 
     fn delete(&mut self, _: &Delete, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(range) = self.selection_range() {
-            self.text.replace_range(range.clone(), "");
+            let start_byte = self.byte_offset_for_char_offset(range.start);
+            let end_byte = self.byte_offset_for_char_offset(range.end);
+            self.text.replace_range(start_byte..end_byte, "");
             self.cursor_offset = range.start;
             self.selection_anchor = None;
-        } else if self.cursor_offset < self.text.len() {
-            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
-            if let Some((next_offset, _)) = char_indices.next() {
-                self.text.replace_range(self.cursor_offset..next_offset, "");
-            } else {
-                self.text.replace_range(self.cursor_offset.., "");
-            }
+        } else if self.cursor_offset < self.text.chars().count() {
+            let start_byte = self.byte_offset_for_char_offset(self.cursor_offset);
+            let end_byte = self.byte_offset_for_char_offset(self.cursor_offset + 1);
+            self.text.replace_range(start_byte..end_byte, "");
         }
+        self.invalidate_cache();
         cx.notify();
     }
 
     fn move_left(&mut self, _: &MoveLeft, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection_anchor = None;
         if self.cursor_offset > 0 {
-            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
-            if let Some((prev_offset, _)) = char_indices.next_back() {
-                self.cursor_offset = prev_offset;
-            }
+            self.cursor_offset -= 1;
         }
         cx.notify();
     }
@@ -185,23 +165,15 @@ impl TextInput {
             self.selection_anchor = Some(self.cursor_offset);
         }
         if self.cursor_offset > 0 {
-            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i < self.cursor_offset);
-            if let Some((prev_offset, _)) = char_indices.next_back() {
-                self.cursor_offset = prev_offset;
-            }
+            self.cursor_offset -= 1;
         }
         cx.notify();
     }
 
     fn move_right(&mut self, _: &MoveRight, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection_anchor = None;
-        if self.cursor_offset < self.text.len() {
-            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
-            if let Some((next_offset, _)) = char_indices.next() {
-                self.cursor_offset = next_offset;
-            } else {
-                self.cursor_offset = self.text.len();
-            }
+        if self.cursor_offset < self.text.chars().count() {
+            self.cursor_offset += 1;
         }
         cx.notify();
     }
@@ -210,13 +182,8 @@ impl TextInput {
         if self.selection_anchor.is_none() {
             self.selection_anchor = Some(self.cursor_offset);
         }
-        if self.cursor_offset < self.text.len() {
-            let mut char_indices = self.text.char_indices().filter(|(i, _)| *i > self.cursor_offset);
-            if let Some((next_offset, _)) = char_indices.next() {
-                self.cursor_offset = next_offset;
-            } else {
-                self.cursor_offset = self.text.len();
-            }
+        if self.cursor_offset < self.text.chars().count() {
+            self.cursor_offset += 1;
         }
         cx.notify();
     }
@@ -237,7 +204,7 @@ impl TextInput {
 
     fn move_end(&mut self, _: &MoveEnd, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection_anchor = None;
-        self.cursor_offset = self.text.len();
+        self.cursor_offset = self.text.chars().count();
         cx.notify();
     }
 
@@ -245,28 +212,33 @@ impl TextInput {
         if self.selection_anchor.is_none() {
             self.selection_anchor = Some(self.cursor_offset);
         }
-        self.cursor_offset = self.text.len();
+        self.cursor_offset = self.text.chars().count();
         cx.notify();
     }
 
-    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection_anchor = Some(0);
-        self.cursor_offset = self.text.len();
+        self.cursor_offset = self.text.chars().count();
         cx.notify();
     }
 
     fn copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(range) = self.selection_range() {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.text[range].to_string()));
+            let start_byte = self.byte_offset_for_char_offset(range.start);
+            let end_byte = self.byte_offset_for_char_offset(range.end);
+            cx.write_to_clipboard(ClipboardItem::new_string(self.text[start_byte..end_byte].to_string()));
         }
     }
 
     fn cut(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(range) = self.selection_range() {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.text[range.clone()].to_string()));
-            self.text.replace_range(range.clone(), "");
+            let start_byte = self.byte_offset_for_char_offset(range.start);
+            let end_byte = self.byte_offset_for_char_offset(range.end);
+            cx.write_to_clipboard(ClipboardItem::new_string(self.text[start_byte..end_byte].to_string()));
+            self.text.replace_range(start_byte..end_byte, "");
             self.cursor_offset = range.start;
             self.selection_anchor = None;
+            self.invalidate_cache();
             cx.notify();
         }
     }
@@ -274,7 +246,7 @@ impl TextInput {
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(item) = cx.read_from_clipboard() {
             if let Some(text) = item.text() {
-                let range = self.selection_range().map(|r| self.offset_to_utf16(r.start)..self.offset_to_utf16(r.end));
+                let range = self.selection_range();
                 self.replace_text_in_range(range, &text, window, cx);
             }
         }
@@ -284,19 +256,7 @@ impl TextInput {
         cx.dispatch_action(&SendMessage);
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
-        if event.modifiers.shift {
-            if self.selection_anchor.is_none() {
-                self.selection_anchor = Some(self.cursor_offset);
-            }
-        } else {
-            self.selection_anchor = None;
-        }
-        cx.notify();
-    }
-
-    fn shape_text(&mut self, window: &mut Window, width: Pixels) -> SmallVec<[WrappedLine; 1]> {
+    fn shape_text(&self, window: &mut Window, width: Pixels) -> SmallVec<[WrappedLine; 1]> {
         let display_text = if self.text.is_empty() {
             self.placeholder.clone()
         } else if self.is_masked {
@@ -305,9 +265,13 @@ impl TextInput {
             self.text.clone()
         };
 
-        if let Some((ref last_text, last_width, ref last_lines)) = self.last_wrapped_lines {
-            if last_text == &display_text && last_width == width {
-                return last_lines.clone();
+        {
+            let cache = self.last_wrapped_lines.borrow();
+            if let Some((ref last_text, last_width, ref last_lines)) = *cache {
+                // Use a small epsilon for width comparison to avoid cache thrashing
+                if last_text == &display_text && (last_width - width).abs() < px(0.1) {
+                    return last_lines.clone();
+                }
             }
         }
 
@@ -333,7 +297,7 @@ impl TextInput {
             None
         ).unwrap_or_default();
 
-        self.last_wrapped_lines = Some((display_text, width, wrapped_lines.clone()));
+        *self.last_wrapped_lines.borrow_mut() = Some((display_text, width, wrapped_lines.clone()));
         wrapped_lines
     }
 }
@@ -345,9 +309,7 @@ impl Render for TextInput {
         div()
             .id("text-input")
             .flex()
-            .items_center()
             .flex_1()
-            .h_full()
             .track_focus(&focus_handle)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
@@ -364,7 +326,6 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::enter))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .child(TextInputElement {
                 view: cx.entity().clone(),
             })
@@ -377,6 +338,7 @@ struct TextInputElement {
 
 impl IntoElement for TextInputElement {
     type Element = Self;
+
     fn into_element(self) -> Self::Element {
         self
     }
@@ -397,20 +359,23 @@ impl Element for TextInputElement {
         window: &mut Window,
         app: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let available_width = window.viewport_size().width - px(64.0);
         let line_height = window.line_height();
-        let height = self.view.update(app, |this, _cx| {
+        let height = {
+            let this = self.view.read(app);
+            // Ensure we have a sane width for the first layout pass
+            let available_width = this.last_layout_width.borrow()
+                .filter(|w| *w > px(1.0))
+                .unwrap_or_else(|| window.viewport_size().width - px(320.0));
+            
             let lines = this.shape_text(window, available_width);
-            let mut total_height = px(0.0);
-            for line in lines {
-                total_height += line.size(line_height).height;
-            }
-            total_height.max(line_height)
-        });
+            let num_lines = lines.len().max(1);
+            line_height * num_lines as f32
+        };
 
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = height.into();
+        style.min_size.height = line_height.into();
 
         (window.request_layout(style, [], app), ())
     }
@@ -439,33 +404,36 @@ impl Element for TextInputElement {
     ) {
         let (is_focused, cursor_offset, selection_range, focus_handle, is_masked, text_len) = {
             let state = self.view.read(cx);
-            let (mapped_cursor, mapped_selection) = if state.is_masked && !state.text.is_empty() {
-                let char_count_to_cursor = state.text[..state.cursor_offset.min(state.text.len())].chars().count();
-                let mapped_sel = state.selection_range().map(|r| {
-                    let start = state.text[..r.start.min(state.text.len())].chars().count();
-                    let end = state.text[..r.end.min(state.text.len())].chars().count();
-                    start..end
-                });
-                (char_count_to_cursor, mapped_sel)
-            } else {
-                (state.cursor_offset, state.selection_range())
-            };
-
             (
                 state.focus_handle.is_focused(window),
-                mapped_cursor,
-                mapped_selection,
+                state.cursor_offset,
+                state.selection_range(),
                 state.focus_handle.clone(),
                 state.is_masked,
-                state.text.len(),
+                state.text.chars().count(),
             )
         };
 
-        let wrapped_lines = self.view.update(cx, |this, _cx| {
+        let wrapped_lines = {
+            let this = self.view.read(cx);
+            *this.last_layout_width.borrow_mut() = Some(bounds.size.width);
             this.shape_text(window, bounds.size.width)
-        });
+        };
 
         let line_height = window.line_height();
+
+        let (state_text, placeholder) = {
+            let state = self.view.read(cx);
+            (state.text.clone(), state.placeholder.clone())
+        };
+
+        let state_text_ref = if state_text.is_empty() {
+            placeholder.clone()
+        } else if is_masked {
+            "*".repeat(text_len)
+        } else {
+            state_text.clone()
+        };
 
         // Handle mouse clicks to set cursor position
         window.on_mouse_event({
@@ -473,35 +441,43 @@ impl Element for TextInputElement {
             let focus_handle = focus_handle.clone();
             let bounds = bounds;
             let wrapped_lines = wrapped_lines.clone();
-            let is_masked = is_masked;
-            let text_len = text_len;
+            let state_text_ref = state_text_ref.clone();
+            let placeholder = placeholder.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                     window.focus(&focus_handle);
                     let local_point = event.position - bounds.origin;
                     
-                    let mut new_offset = 0;
+                    let mut new_offset_chars = 0;
                     let mut current_y = px(0.0);
+                    let mut current_line_start_byte = 0;
                     let line_height = window.line_height();
+
+                    // Don't set cursor based on placeholder text
+                    if state_text_ref == placeholder {
+                        return;
+                    }
+
                     for line in &wrapped_lines {
                         let line_size = line.size(line_height);
+                        let line_len_bytes = line.len();
                         if local_point.y >= current_y && local_point.y < current_y + line_size.height {
                             let local_line_point = point(local_point.x, local_point.y - current_y);
-                            if let Ok(index) = line.index_for_position(local_line_point, line_height) {
-                                new_offset += index;
+                            if let Ok(index_bytes) = line.index_for_position(local_line_point, line_height) {
+                                let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
+                                let char_offset_in_line = line_text[..index_bytes.min(line_len_bytes)].chars().count();
+                                new_offset_chars += char_offset_in_line;
                                 break;
                             }
                         }
-                        new_offset += line.len();
+                        let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
+                        new_offset_chars += line_text.chars().count();
                         current_y += line_size.height;
+                        current_line_start_byte += line_len_bytes;
                     }
 
                     view.update(cx, |this, cx| {
-                        let actual_index = if is_masked && text_len > 0 {
-                            this.text.char_indices().map(|(i, _)| i).nth(new_offset).unwrap_or(this.text.len())
-                        } else {
-                            new_offset
-                        };
+                        let actual_index = new_offset_chars;
 
                         if event.modifiers.shift {
                             if this.selection_anchor.is_none() {
@@ -510,8 +486,10 @@ impl Element for TextInputElement {
                         } else {
                             this.selection_anchor = None;
                         }
-                        this.cursor_offset = actual_index;
-                        cx.notify();
+                        if this.cursor_offset != actual_index {
+                            this.cursor_offset = actual_index;
+                            cx.notify();
+                        }
                     });
                 }
             }
@@ -522,70 +500,98 @@ impl Element for TextInputElement {
             let view = self.view.clone();
             let wrapped_lines = wrapped_lines.clone();
             let bounds = bounds;
-            let is_masked = is_masked;
-            let text_len = text_len;
-            move |event: &MouseMoveEvent, phase, window, cx| {
+            let state_text_ref = state_text_ref.clone();
+            let placeholder = placeholder.clone();
+            move |event: &MouseMoveEvent, phase, _window, cx| {
                 if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && bounds.contains(&event.position) {
                     let local_point = event.position - bounds.origin;
-                    let mut new_offset = 0;
+                    let mut new_offset_chars = 0;
                     let mut current_y = px(0.0);
-                    let line_height = window.line_height();
+                    let mut current_line_start_byte = 0;
+                    let line_height = _window.line_height();
+
+                    // Don't set selection based on placeholder text
+                    if state_text_ref == placeholder {
+                        return;
+                    }
+
                     for line in &wrapped_lines {
                         let line_size = line.size(line_height);
+                        let line_len_bytes = line.len();
                         if local_point.y >= current_y && local_point.y < current_y + line_size.height {
                             let local_line_point = point(local_point.x, local_point.y - current_y);
-                            if let Ok(index) = line.index_for_position(local_line_point, line_height) {
-                                new_offset += index;
+                            if let Ok(index_bytes) = line.index_for_position(local_line_point, line_height) {
+                                let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
+                                let char_offset_in_line = line_text[..index_bytes.min(line_len_bytes)].chars().count();
+                                new_offset_chars += char_offset_in_line;
                                 break;
                             }
                         }
-                        new_offset += line.len();
+                        let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
+                        new_offset_chars += line_text.chars().count();
                         current_y += line_size.height;
+                        current_line_start_byte += line_len_bytes;
                     }
 
                     view.update(cx, |this, cx| {
-                        let actual_index = if is_masked && text_len > 0 {
-                            this.text.char_indices().map(|(i, _)| i).nth(new_offset).unwrap_or(this.text.len())
-                        } else {
-                            new_offset
-                        };
+                        let actual_index = new_offset_chars;
 
                         if this.selection_anchor.is_none() {
                             this.selection_anchor = Some(this.cursor_offset);
                         }
-                        this.cursor_offset = actual_index;
-                        cx.notify();
+                        if this.cursor_offset != actual_index {
+                            this.cursor_offset = actual_index;
+                            cx.notify();
+                        }
                     });
                 }
             }
         });
 
         // Paint selection highlight
-        if is_focused {
-            if let Some(ref range) = selection_range {
+        if is_focused && !state_text.is_empty() {
+            if let Some(ref char_range) = selection_range {
+                // Convert character range to byte range for the painting loop
+                let this = self.view.read(cx);
+                let range = this.byte_offset_for_char_offset(char_range.start)..this.byte_offset_for_char_offset(char_range.end);
+                
                 let mut current_y = bounds.origin.y;
-                let mut remaining_start = range.start;
-                let mut remaining_end = range.end;
+                let mut line_start_byte_offset = 0;
 
                 for line in &wrapped_lines {
+                    let line_len_bytes = line.len();
+                    let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
                     let line_size = line.size(line_height);
-                    if remaining_start < line.len() && remaining_end > 0 {
-                        let sel_start = remaining_start;
-                        let sel_end = remaining_end.min(line.len());
-                        
-                        let start_x = line.position_for_index(sel_start, line_height).unwrap_or(point(px(0.0), px(0.0))).x;
-                        let end_x = line.position_for_index(sel_end, line_height).unwrap_or(point(line_size.width, px(0.0))).x;
+
+                    // Calculate intersection in byte space
+                    let sel_start_byte = range.start.max(line_start_byte_offset).min(line_end_byte_offset);
+                    let sel_end_byte = range.end.max(line_start_byte_offset).min(line_end_byte_offset);
+
+                    if sel_start_byte < sel_end_byte {
+                        let relative_start_byte = sel_start_byte - line_start_byte_offset;
+                        let relative_end_byte = sel_end_byte - line_start_byte_offset;
+
+                        let start_x = if sel_start_byte == line_start_byte_offset {
+                            px(0.0)
+                        } else {
+                            line.position_for_index(relative_start_byte, line_height).unwrap_or(point(px(0.0), px(0.0))).x
+                        };
+
+                        let end_x = if sel_end_byte == line_end_byte_offset {
+                            line_size.width
+                        } else {
+                            line.position_for_index(relative_end_byte, line_height).unwrap_or(point(line_size.width, px(0.0))).x
+                        };
 
                         window.paint_quad(fill(
                             Bounds {
                                 origin: point(bounds.origin.x + start_x, current_y),
                                 size: size(end_x - start_x, line_height),
                             },
-                            rgba(0x4488cc44),
+                            rgba(0x4488cc88),
                         ));
                     }
-                    remaining_start = remaining_start.saturating_sub(line.len());
-                    remaining_end = remaining_end.saturating_sub(line.len());
+                    line_start_byte_offset = line_end_byte_offset;
                     current_y += line_size.height;
                 }
             }
@@ -604,17 +610,27 @@ impl Element for TextInputElement {
         // Render cursor
         if is_focused && selection_range.is_none() {
             let mut current_y = bounds.origin.y;
-            let mut remaining_offset = cursor_offset;
+            let mut line_start_byte_offset = 0;
             let mut cursor_pos = None;
 
-            for line in &wrapped_lines {
-                if remaining_offset <= line.len() {
-                    let pos = line.position_for_index(remaining_offset, line_height).unwrap_or(point(px(0.0), px(0.0)));
-                    cursor_pos = Some(point(bounds.origin.x + pos.x, current_y + pos.y));
-                    break;
+            if state_text.is_empty() {
+                cursor_pos = Some(bounds.origin);
+            } else {
+                let target_byte_offset = self.view.read(cx).byte_offset_for_char_offset(cursor_offset);
+                for line in &wrapped_lines {
+                    let line_len_bytes = line.len();
+                    let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
+                    let line_size = line.size(line_height);
+
+                    if target_byte_offset >= line_start_byte_offset && target_byte_offset <= line_end_byte_offset {
+                        let relative_byte = target_byte_offset - line_start_byte_offset;
+                        let pos = line.position_for_index(relative_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                        cursor_pos = Some(point(bounds.origin.x + pos.x, current_y + pos.y));
+                        break;
+                    }
+                    line_start_byte_offset = line_end_byte_offset;
+                    current_y += line_size.height;
                 }
-                remaining_offset -= line.len();
-                current_y += line.size(line_height).height;
             }
 
             if let Some(pos) = cursor_pos {
@@ -636,20 +652,25 @@ impl Element for TextInputElement {
 
 impl EntityInputHandler for TextInput {
     fn text_for_range(&mut self, range: Range<usize>, _adjusted_range: &mut Option<Range<usize>>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<String> {
-        let start = self.utf16_to_offset(range.start);
-        let end = self.utf16_to_offset(range.end);
-        self.text.get(start..end).map(|s| s.to_string())
+        let text_utf16: Vec<u16> = self.text.encode_utf16().collect();
+        let start = range.start.min(text_utf16.len());
+        let end = range.end.min(text_utf16.len());
+        String::from_utf16(&text_utf16[start..end]).ok()
     }
 
     fn selected_text_range(&mut self, _ignore_disabled_input: bool, _window: &mut Window, _cx: &mut Context<Self>) -> Option<UTF16Selection> {
         let range = if let Some(r) = self.selection_range() {
-            self.offset_to_utf16(r.start)..self.offset_to_utf16(r.end)
+            self.byte_offset_for_char_offset(r.start)..self.byte_offset_for_char_offset(r.end)
         } else {
-            let offset = self.offset_to_utf16(self.cursor_offset);
+            let offset = self.byte_offset_for_char_offset(self.cursor_offset);
             offset..offset
         };
+
+        let start_utf16 = self.text[..range.start].encode_utf16().count();
+        let end_utf16 = self.text[..range.end].encode_utf16().count();
+
         Some(UTF16Selection {
-            range,
+            range: start_utf16..end_utf16,
             reversed: false,
         })
     }
@@ -661,27 +682,37 @@ impl EntityInputHandler for TextInput {
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
 
     fn replace_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(r) = range {
-            let start = self.utf16_to_offset(r.start);
-            let end = self.utf16_to_offset(r.end);
-            if self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
-                self.text.replace_range(start..end, text);
-                self.cursor_offset = start + text.len();
+        let char_range = range.map(|r| {
+            let text_utf16: Vec<u16> = self.text.encode_utf16().collect();
+            let start_byte = String::from_utf16(&text_utf16[..r.start.min(text_utf16.len())]).map(|s| s.len()).unwrap_or(0);
+            let end_byte = String::from_utf16(&text_utf16[..r.end.min(text_utf16.len())]).map(|s| s.len()).unwrap_or(0);
+            
+            let start_char = self.char_offset_for_byte_offset(start_byte);
+            let end_char = self.char_offset_for_byte_offset(end_byte);
+            start_char..end_char
+        });
+
+        if let Some(r) = char_range {
+            let start_byte = self.byte_offset_for_char_offset(r.start);
+            let end_byte = self.byte_offset_for_char_offset(r.end);
+            if self.text.is_char_boundary(start_byte) && self.text.is_char_boundary(end_byte) {
+                self.text.replace_range(start_byte..end_byte, text);
+                self.cursor_offset = r.start + text.chars().count();
                 self.selection_anchor = None;
             }
         } else {
-            if self.text.is_char_boundary(self.cursor_offset) {
-                self.text.insert_str(self.cursor_offset, text);
-                self.cursor_offset += text.len();
+            let byte_offset = self.byte_offset_for_char_offset(self.cursor_offset);
+            if self.text.is_char_boundary(byte_offset) {
+                self.text.insert_str(byte_offset, text);
+                self.cursor_offset += text.chars().count();
                 self.selection_anchor = None;
             } else {
-                self.cursor_offset = self.text.len();
                 self.text.push_str(text);
-                self.cursor_offset = self.text.len();
+                self.cursor_offset = self.text.chars().count();
                 self.selection_anchor = None;
             }
         }
-        self.last_wrapped_lines = None; // Invalidate cache
+        self.invalidate_cache();
         cx.notify();
     }
 
@@ -699,8 +730,20 @@ impl EntityInputHandler for TextInput {
 }
 
 // ---------------------------------------------------------------------------
-// MobieWorkspace – root GPUI view
+// Main Workspace View
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Clone)]
+enum AppView {
+    Chat,
+    Settings,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum NavTabAction {
+    Chat,
+    Settings,
+}
 
 pub struct MobieWorkspace {
     focus_handle: FocusHandle,
@@ -708,15 +751,11 @@ pub struct MobieWorkspace {
     messages: Vec<ChatMessage>,
     agent_status: AgentStatus,
     cmd_tx: mpsc::Sender<AgentMessage>,
-
-    // App view (Chat / Settings)
     current_view: AppView,
-
-    // Device state
     devices: Vec<String>,
     selected_device: Option<String>,
-
-    // Input fields
+    
+    // Inputs
     chat_input: Entity<TextInput>,
     settings_api_key: Entity<TextInput>,
     settings_model: Entity<TextInput>,
@@ -726,9 +765,9 @@ pub struct MobieWorkspace {
 impl MobieWorkspace {
     pub fn new(
         cx: &mut Context<Self>,
+        initial_config: AppConfig,
         cmd_tx: mpsc::Sender<AgentMessage>,
         mut update_rx: mpsc::Receiver<AgentUpdate>,
-        initial_config: AppConfig,
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let chat_scroll_handle = ScrollHandle::new();
@@ -822,6 +861,7 @@ impl MobieWorkspace {
             input.text.clear();
             input.cursor_offset = 0;
             input.selection_anchor = None;
+            input.invalidate_cache();
             cx.notify();
         });
 
@@ -1199,9 +1239,7 @@ impl MobieWorkspace {
                     .bg(rgb(0x16213e))
                     .rounded(px(12.0))
                     .p(px(14.0))
-                    .flex()
-                    .items_center()
-                    .overflow_hidden()
+                    .flex_col()
                     .child(self.chat_input.clone())
                     .when(is_idle && !self.chat_input.read(cx).text().is_empty(), |d| {
                         d.child(
@@ -1336,7 +1374,6 @@ impl MobieWorkspace {
                     .p(px(12.0))
                     .border_1()
                     .border_color(rgb(0x2a2a4a))
-                    .overflow_hidden()
                     .child(input)
             )
     }

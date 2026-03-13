@@ -74,7 +74,7 @@ fn main() {
 
                 // Build and focus the root workspace view
                 let entity = app.new(|cx| {
-                    MobieWorkspace::new(cx, engine.sender, update_rx, config_for_window.clone())
+                    MobieWorkspace::new(cx, config_for_window.clone(), engine.sender, update_rx)
                 });
 
                 let focus_handle = entity.read(app).focus_handle().clone();
