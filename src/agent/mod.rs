@@ -1,4 +1,5 @@
 pub mod action;
+pub mod rig_agent;
 
 pub use action::Action;
 use tokio::sync::mpsc;
