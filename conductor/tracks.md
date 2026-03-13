@@ -9,5 +9,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: migrate core agent to Rig rust**
+- [x] **Track: migrate core agent to Rig rust**
 *Link: [./tracks/migrate_core_agent_rig_20260313/](./tracks/migrate_core_agent_rig_20260313/)*
