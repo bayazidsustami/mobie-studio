@@ -49,3 +49,7 @@ Migrate the existing custom agent loop to the **Rig** framework, using a Rig-nat
 - [x] Task: Cleanup Legacy Code (03d3907)
     - [x] Remove redundant logic in `src/llm/` and old agent files.
 - [x] Task: Conductor - User Manual Verification 'Phase 4: OpenRouter Integration & Final Validation' (Protocol in workflow.md) (7b6107f)
+
+## Phase: Review Fixes
+- [x] Task: Apply review suggestions (2ca6a45)
+
