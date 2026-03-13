@@ -173,6 +173,44 @@ impl Tool for KeyEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Observe Tool
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ObserveArgs {
+    pub reasoning: String,
+}
+
+pub struct Observe;
+
+impl Tool for Observe {
+    const NAME: &'static str = "observe";
+
+    type Error = ToolError;
+    type Args = ObserveArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Observe the current UI state of the mobile device. Returns a compressed XML representation of the screen.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "reasoning": { "type": "string", "description": "Why this observation is being performed" }
+                },
+                "required": ["reasoning"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // In real implementation, this would call DeviceBridge::observe_ui()
+        Ok(format!("UI State observed for: {}", args.reasoning))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -228,5 +266,15 @@ mod tests {
         };
         let result = tool.call(args).await.unwrap();
         assert!(result.contains("4"));
+    }
+
+    #[tokio::test]
+    async fn test_observe_tool_call() {
+        let tool = Observe;
+        let args = ObserveArgs {
+            reasoning: "Test observation".to_string(),
+        };
+        let result = tool.call(args).await.unwrap();
+        assert!(result.contains("observed"));
     }
 }
