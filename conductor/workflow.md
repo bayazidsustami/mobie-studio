@@ -15,54 +15,61 @@ All tasks follow a strict lifecycle:
 
 ### Standard Task Workflow
 
-1. **Select Task:** Choose the next available task from `plan.md` in sequential order
+1. **Branch from Develop:** Before starting a new track or major task, create a new feature branch from the `develop` branch.
+   ```bash
+   git checkout develop
+   git pull origin develop
+   git checkout -b feature/your-feature-name
+   ```
 
-2. **Mark In Progress:** Before beginning work, edit `plan.md` and change the task from `[ ]` to `[~]`
+2. **Select Task:** Choose the next available task from `plan.md` in sequential order
 
-3. **Write Failing Tests (Red Phase):**
-   - Create a new test file for the feature or bug fix.
+3. **Mark In Progress:** Before beginning work, edit `plan.md` and change the task from `[ ]` to `[~]`
+
+4. **Write Failing Tests (Red Phase):**
+   - Create a new test file for the feature or bug fix in the `tests/` directory or as a module test.
    - Write one or more unit tests that clearly define the expected behavior and acceptance criteria for the task.
-   - **CRITICAL:** Run the tests and confirm that they fail as expected. This is the "Red" phase of TDD. Do not proceed until you have failing tests.
+   - **CRITICAL:** Run the tests using `cargo test` and confirm that they fail as expected. This is the "Red" phase of TDD. Do not proceed until you have failing tests.
 
-4. **Implement to Pass Tests (Green Phase):**
+5. **Implement to Pass Tests (Green Phase):**
    - Write the minimum amount of application code necessary to make the failing tests pass.
-   - Run the test suite again and confirm that all tests now pass. This is the "Green" phase.
+   - Run the test suite again (`cargo test`) and confirm that all tests now pass. This is the "Green" phase.
 
-5. **Refactor (Optional but Recommended):**
+6. **Refactor (Optional but Recommended):**
    - With the safety of passing tests, refactor the implementation code and the test code to improve clarity, remove duplication, and enhance performance without changing the external behavior.
    - Rerun tests to ensure they still pass after refactoring.
 
-6. **Verify Coverage:** Run coverage reports using the project's chosen tools. For example, in a Python project, this might look like:
+7. **Verify Coverage:** Run coverage reports using `cargo tarpaulin` or `cargo llvm-cov`.
    ```bash
-   pytest --cov=app --cov-report=html
+   cargo tarpaulin --out Html
    ```
-   Target: >80% coverage for new code. The specific tools and commands will vary by language and framework.
+   Target: >80% coverage for new code.
 
-7. **Document Deviations:** If implementation differs from tech stack:
+8. **Document Deviations:** If implementation differs from tech stack:
    - **STOP** implementation
    - Update `tech-stack.md` with new design
    - Add dated note explaining the change
    - Resume implementation
 
-8. **Commit Code Changes:**
+9. **Commit Code Changes:**
    - Stage all code changes related to the task.
    - Propose a clear, concise commit message e.g, `feat(ui): Create basic HTML structure for calculator`.
    - Perform the commit.
 
-9. **Attach Task Summary with Git Notes:**
-   - **Step 9.1: Get Commit Hash:** Obtain the hash of the *just-completed commit* (`git log -1 --format="%H"`).
-   - **Step 9.2: Draft Note Content:** Create a detailed summary for the completed task. This should include the task name, a summary of changes, a list of all created/modified files, and the core "why" for the change.
-   - **Step 9.3: Attach Note:** Use the `git notes` command to attach the summary to the commit.
+10. **Attach Task Summary with Git Notes:**
+   - **Step 10.1: Get Commit Hash:** Obtain the hash of the *just-completed commit* (`git log -1 --format="%H"`).
+   - **Step 10.2: Draft Note Content:** Create a detailed summary for the completed task. This should include the task name, a summary of changes, a list of all created/modified files, and the core "why" for the change.
+   - **Step 10.3: Attach Note:** Use the `git notes` command to attach the summary to the commit.
      ```bash
      # The note content from the previous step is passed via the -m flag.
      git notes add -m "<note content>" <commit_hash>
      ```
 
-10. **Get and Record Task Commit SHA:**
-    - **Step 10.1: Update Plan:** Read `plan.md`, find the line for the completed task, update its status from `[~]` to `[x]`, and append the first 7 characters of the *just-completed commit's* commit hash.
-    - **Step 10.2: Write Plan:** Write the updated content back to `plan.md`.
+11. **Get and Record Task Commit SHA:**
+    - **Step 11.1: Update Plan:** Read `plan.md`, find the line for the completed task, update its status from `[~]` to `[x]`, and append the first 7 characters of the *just-completed commit's* commit hash.
+    - **Step 11.2: Write Plan:** Write the updated content back to `plan.md`.
 
-11. **Commit Plan Update:**
+12. **Commit Plan Update:**
     - **Action:** Stage the modified `plan.md` file.
     - **Action:** Commit this change with a descriptive message (e.g., `conductor(plan): Mark task 'Create user model' as complete`).
 
@@ -150,27 +157,32 @@ Before marking any task complete, verify:
 
 ## Development Commands
 
-**AI AGENT INSTRUCTION: This section should be adapted to the project's specific language, framework, and build tools.**
-
 ### Setup
 ```bash
-# Example: Commands to set up the development environment (e.g., install dependencies, configure database)
-# e.g., for a Node.js project: npm install
-# e.g., for a Go project: go mod tidy
+# Install dependencies and update lockfile
+cargo fetch
+# Install development tools if needed (e.g., cargo-tarpaulin, cargo-expand)
+cargo install cargo-tarpaulin
 ```
 
 ### Daily Development
 ```bash
-# Example: Commands for common daily tasks (e.g., start dev server, run tests, lint, format)
-# e.g., for a Node.js project: npm run dev, npm test, npm run lint
-# e.g., for a Go project: go run main.go, go test ./..., go fmt ./...
+# Run the application in debug mode
+cargo run
+# Run all tests
+cargo test
+# Run a specific test
+cargo test --test <test_name>
+# Lint the code
+cargo clippy -- -D warnings
+# Format the code
+cargo fmt
 ```
 
 ### Before Committing
 ```bash
-# Example: Commands to run all pre-commit checks (e.g., format, lint, type check, run tests)
-# e.g., for a Node.js project: npm run check
-# e.g., for a Go project: make check (if a Makefile exists)
+# Run all pre-commit checks
+cargo fmt --check && cargo clippy -- -D warnings && cargo test
 ```
 
 ## Testing Requirements
@@ -187,12 +199,11 @@ Before marking any task complete, verify:
 - Test authentication and authorization
 - Check form submissions
 
-### Mobile Testing
-- Test on actual iPhone when possible
-- Use Safari developer tools
-- Test touch interactions
-- Verify responsive layouts
-- Check performance on 3G/4G
+### Device & ADB Testing
+- Test UI dumping with `uiautomator`
+- Verify action execution (tap, swipe, input) on real/emulated Android devices
+- Check XML compression and LLM prompt formatting
+- Validate YAML test case generation after exploratory runs
 
 ## Code Review Process
 
@@ -205,32 +216,25 @@ Before requesting review:
    - Error messages are user-friendly
 
 2. **Code Quality**
-   - Follows style guide
+   - Follows Rust style guide and GPUI conventions
    - DRY principle applied
    - Clear variable/function names
    - Appropriate comments
 
 3. **Testing**
    - Unit tests comprehensive
-   - Integration tests pass
+   - Integration tests pass (using mock ADB or real device)
    - Coverage adequate (>80%)
 
 4. **Security**
+   - BYOK API keys protected
    - No hardcoded secrets
    - Input validation present
-   - SQL injection prevented
-   - XSS protection in place
 
 5. **Performance**
-   - Database queries optimized
-   - Images optimized
-   - Caching implemented where needed
-
-6. **Mobile Experience**
-   - Touch targets adequate (44x44px)
-   - Text readable without zooming
-   - Performance acceptable on mobile
-   - Interactions feel native
+   - Async tasks don't block the UI thread
+   - XML parsing is optimized
+   - ADB commands are efficient
 
 ## Commit Guidelines
 
@@ -254,10 +258,10 @@ Before requesting review:
 
 ### Examples
 ```bash
-git commit -m "feat(auth): Add remember me functionality"
-git commit -m "fix(posts): Correct excerpt generation for short posts"
-git commit -m "test(comments): Add tests for emoji reaction limits"
-git commit -m "style(mobile): Improve button touch targets"
+git commit -m "feat(agent): add swipe gesture support"
+git commit -m "fix(ui): reduce chat input latency"
+git commit -m "test(adb): add tests for device discovery"
+git commit -m "refactor(xml): optimize hierarchy compression"
 ```
 
 ## Definition of Done
@@ -269,20 +273,21 @@ A task is complete when:
 3. Code coverage meets project requirements
 4. Documentation complete (if applicable)
 5. Code passes all configured linting and static analysis checks
-6. Works beautifully on mobile (if applicable)
-7. Implementation notes added to `plan.md`
-8. Changes committed with proper message
-9. Git note with task summary attached to the commit
+6. Implementation notes added to `plan.md`
+7. Changes committed with proper message
+8. Git note with task summary attached to the commit
+9. **YAML Test Case generated and verified** (if applicable)
 
 ## Emergency Procedures
 
 ### Critical Bug in Production
-1. Create hotfix branch from main
+1. Create `hotfix/` branch from `main`
 2. Write failing test for bug
 3. Implement minimal fix
-4. Test thoroughly including mobile
-5. Deploy immediately
-6. Document in plan.md
+4. Test thoroughly
+5. Merge back to BOTH `main` and `develop`
+6. Tag release on `main`
+7. Document in `plan.md`
 
 ### Data Loss
 1. Stop all write operations
@@ -304,25 +309,22 @@ A task is complete when:
 - [ ] All tests passing
 - [ ] Coverage >80%
 - [ ] No linting errors
-- [ ] Mobile testing complete
-- [ ] Environment variables configured
-- [ ] Database migrations ready
-- [ ] Backup created
+- [ ] Device testing complete
+- [ ] Environment variables (LLM keys) configured
+- [ ] Project builds in Release mode (`cargo build --release`)
 
-### Deployment Steps
-1. Merge feature branch to main
-2. Tag release with version
-3. Push to deployment service
-4. Run database migrations
-5. Verify deployment
-6. Test critical paths
-7. Monitor for errors
+### Deployment Steps (Git Flow)
+1. **Feature Merge:** Once a feature is complete and validated, merge it into the `develop` branch via a Pull Request.
+2. **Release Preparation:** When `develop` is ready for a release, create a `release/` branch.
+3. **Merge to Main:** Merge the release branch into `main`.
+4. **Tag Release:** Tag the commit on `main` with the version number.
+5. **Back-merge:** Merge the release branch (or `main`) back into `develop` to ensure all fixes are integrated.
+6. **Distribution:** Build the final binaries for distribution.
 
 ### Post-Deployment
-1. Monitor analytics
-2. Check error logs
-3. Gather user feedback
-4. Plan next iteration
+1. Monitor logs for LLM or ADB errors
+2. Gather user feedback
+3. Plan next iteration
 
 ## Continuous Improvement
 
