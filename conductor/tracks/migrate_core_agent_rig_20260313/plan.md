@@ -9,14 +9,14 @@ Migrate the existing custom agent loop to the **Rig** framework, using a Rig-nat
 - **Tech Stack:** `conductor/tech-stack.md` (to be updated)
 - **Workflow:** `conductor/workflow.md` (TDD required)
 
-## Phase 1: Environment Setup & Rig Foundation
-- [ ] Task: Add Rig dependencies to `Cargo.toml`
-    - [ ] Add `rig-core`, `rig-openai` (or relevant) and any needed async traits.
-- [ ] Task: Update `tech-stack.md` with Rig details
-    - [ ] Document the adoption of Rig and the removal of custom LLM wrappers.
-- [ ] Task: Create Rig Integration Test Skeleton
-    - [ ] Write a failing test in `tests/rig_init.rs` that attempts to initialize a Rig agent.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Rig Foundation' (Protocol in workflow.md)
+## Phase 1: Environment Setup & Rig Foundation [checkpoint: 74e082e]
+- [x] Task: Add Rig dependencies to `Cargo.toml` (1a3cf6a)
+    - [x] Add `rig-core`, `rig-openai` (or relevant) and any needed async traits.
+- [x] Task: Update `tech-stack.md` with Rig details (db24278)
+    - [x] Document the adoption of Rig and the removal of custom LLM wrappers.
+- [x] Task: Create Rig Integration Test Skeleton (9dd3a97)
+    - [x] Write a failing test in `tests/rig_init.rs` that attempts to initialize a Rig agent.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Rig Foundation' (Protocol in workflow.md) (74e082e)
 
 ## Phase 2: Core Agent Re-architecture
 - [ ] Task: Implement `RigAgent` Structure
