@@ -1,5 +1,6 @@
 pub mod action;
 pub mod rig_agent;
+pub mod tools;
 
 pub use action::Action;
 use tokio::sync::mpsc;
@@ -115,9 +116,9 @@ impl AgentEngine {
         update_tx: mpsc::Sender<AgentUpdate>,
     ) {
         // Load persisted config on startup (or could receive via channel from main)
-        let _app_config = crate::config::load_config();
+        let app_config = crate::config::load_config();
         let mut device = DeviceBridge::new();
-        let rig_agent = rig_agent::RigAgent::new();
+        let mut rig_agent = rig_agent::RigAgent::new(app_config.llm.clone());
 
         info!("Agent Engine started. Waiting for goals...");
         let _ = update_tx
@@ -134,8 +135,7 @@ impl AgentEngine {
                 // ----------------------------------------------------------------
                 AgentMessage::UpdateConfig(new_cfg) => {
                     info!("Config updated: model={}", new_cfg.model);
-                    // TODO: Re-initialize rig_agent with new config in Phase 4
-                    // rig_agent = rig_agent::RigAgent::new_with_config(new_cfg);
+                    rig_agent = rig_agent::RigAgent::new(new_cfg);
                 }
                 AgentMessage::SelectDevice(id) => {
                     info!("Device selected: {}", id);
@@ -564,7 +564,8 @@ mod tests {
     async fn test_agent_engine_uses_rig_agent() {
         // This is a placeholder test to drive the integration.
         // We'll check if RigAgent can be used within the engine context.
-        let _rig = rig_agent::RigAgent::new();
+        let config = LlmConfig::default();
+        let _rig = rig_agent::RigAgent::new(config);
         // The real verification will be in the implementation of run_loop.
         assert!(true);
     }
