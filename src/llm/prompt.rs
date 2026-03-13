@@ -91,6 +91,6 @@ mod tests {
         assert!(message.contains("RECENT HISTORY:"));
         assert!(message.contains("1. Tap(50, 50) — init"));
         assert!(message.contains("CURRENT SCREEN:"));
-        assert!(message.contains("[0] Button \"Settings\" bounds=[0,0][100,100] clickable"));
+        assert!(message.contains("[0] Button \"Settings\" center=[50,50] bounds=[0,0][100,100] clickable"));
     }
 }

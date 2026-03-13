@@ -475,6 +475,7 @@ fn action_to_test_step(action: &Action) -> TestStep {
             direction,
             x,
             y,
+            distance,
             reasoning,
             sub_goal,
         } => {
@@ -485,6 +486,9 @@ fn action_to_test_step(action: &Action) -> TestStep {
             );
             p.insert("x".to_string(), json!(x));
             p.insert("y".to_string(), json!(y));
+            if let Some(d) = distance {
+                p.insert("distance".to_string(), json!(d));
+            }
             p.insert("sub_goal".to_string(), json!(sub_goal));
             ("swipe", p, reasoning.clone())
         }
