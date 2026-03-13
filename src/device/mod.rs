@@ -206,13 +206,23 @@ impl DeviceBridge {
             Action::Tap { x, y, .. } => self.tap(*x, *y).await,
             Action::Input { text, .. } => self.input_text(text).await,
             Action::Swipe {
-                direction, x, y, ..
+                direction,
+                x,
+                y,
+                distance,
+                ..
             } => {
+                let (w, h) = self.get_screen_size().await.unwrap_or((1080, 2400));
+                let dist = distance.unwrap_or_else(|| match direction {
+                    SwipeDirection::Up | SwipeDirection::Down => h / 3,
+                    SwipeDirection::Left | SwipeDirection::Right => w / 2,
+                });
+
                 let (x2, y2) = match direction {
-                    SwipeDirection::Up => (*x, y.saturating_sub(600)),
-                    SwipeDirection::Down => (*x, y + 600),
-                    SwipeDirection::Left => (x.saturating_sub(400), *y),
-                    SwipeDirection::Right => (x + 400, *y),
+                    SwipeDirection::Up => (*x, y.saturating_sub(dist)),
+                    SwipeDirection::Down => (*x, (*y + dist).min(h - 1)),
+                    SwipeDirection::Left => (x.saturating_sub(dist), *y),
+                    SwipeDirection::Right => ((*x + dist).min(w - 1), *y),
                 };
                 self.swipe(*x, *y, x2, y2, 300).await
             }
@@ -222,5 +232,37 @@ impl DeviceBridge {
                 Ok(())
             }
         }
+    }
+
+    /// Fetches the screen dimensions via `adb shell wm size`.
+    pub async fn get_screen_size(&self) -> Result<(u32, u32)> {
+        info!("Fetching screen size via wm size...");
+        let base = self.adb_base_args();
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new("adb")
+                .args(&base)
+                .args(["shell", "wm", "size"])
+                .output()
+        })
+        .await
+        .context("spawn_blocking for wm size panicked")?
+        .context("Failed to run wm size")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Typical output: "Physical size: 1080x2400"
+        if let Some(line) = stdout.lines().next() {
+            if let Some(size_str) = line.split(':').last() {
+                let parts: Vec<&str> = size_str.trim().split('x').collect();
+                if parts.len() == 2 {
+                    let w = parts[0].parse::<u32>()?;
+                    let h = parts[1].parse::<u32>()?;
+                    return Ok((w, h));
+                }
+            }
+        }
+        Err(anyhow::anyhow!(
+            "Failed to parse screen size from: {}",
+            stdout
+        ))
     }
 }

@@ -36,6 +36,9 @@ pub enum Action {
         x: u32,
         #[serde(default = "default_swipe_y")]
         y: u32,
+        /// Optional distance to swipe (e.g. 500 pixels). If omitted, a default is used.
+        #[serde(default)]
+        distance: Option<u32>,
         #[serde(default)]
         sub_goal: String,
         #[serde(default)]
@@ -110,10 +113,15 @@ impl std::fmt::Display for Action {
                 direction,
                 x,
                 y,
+                distance,
                 reasoning,
                 ..
             } => {
-                write!(f, "Swipe({:?} from {},{}) — {}", direction, x, y, reasoning)
+                if let Some(d) = distance {
+                    write!(f, "Swipe({:?}, dist={}, from {},{}) — {}", direction, d, x, y, reasoning)
+                } else {
+                    write!(f, "Swipe({:?} from {},{}) — {}", direction, x, y, reasoning)
+                }
             }
             Action::KeyEvent { code, reasoning, .. } => {
                 write!(f, "KeyEvent({}) — {}", code, reasoning)

@@ -51,6 +51,10 @@ impl std::fmt::Display for UiElement {
             parts.push(format!("parent={}", p_idx));
         }
 
+        if let Some((cx, cy)) = self.center() {
+            parts.push(format!("center=[{},{}]", cx, cy));
+        }
+
         parts.push(format!("bounds={}", self.bounds));
 
         let mut flags = Vec::new();
@@ -269,6 +273,7 @@ mod tests {
         let compressed = compress_xml(SAMPLE_XML);
         assert!(compressed.contains("[0]"));
         assert!(compressed.contains("\"Settings\""));
+        assert!(compressed.contains("center=[200,300]"));
         assert!(compressed.contains("clickable"));
         assert!(compressed.contains("[1]"));
         assert!(compressed.contains("\"Battery 85%\""));
