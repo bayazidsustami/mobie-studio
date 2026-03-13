@@ -15,7 +15,8 @@
 ## Integrations & APIs
 - **HTTP Client:** reqwest
 - **Device Interaction:** Local ADB (`std::process::Command` calls)
-- **LLM Provider:** Bring-Your-Own-Key (BYOK) HTTP API compatible with standard LLM interfaces
+- **LLM Framework:** Rig Rust (`rig-core`)
+- **LLM Provider:** OpenRouter via OpenAI-compatible HTTP API
 
 ## Data & Serialization
 - **Serialization Formats:** serde (JSON, YAML, TOML)
