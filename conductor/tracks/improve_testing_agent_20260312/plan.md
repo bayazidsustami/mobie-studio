@@ -22,7 +22,7 @@
 - [x] Task: Implement logic to detect and wait for dynamic loading states (spinners, etc.) in `AgentEngine`. [f60d293]
     - [x] Write Tests for dynamic wait logic
     - [x] Implement Feature
-- [ ] Task: Improve element targeting and scroll logic for long lists in `src/device/mod.rs`.
-    - [ ] Write Tests for list navigation
-    - [ ] Implement Feature
+- [x] Task: Improve element targeting and scroll logic for long lists in `src/device/mod.rs`. [5aea11f]
+    - [x] Write Tests for list navigation
+    - [x] Implement Feature
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Robust Interaction patterns' (Protocol in workflow.md)
