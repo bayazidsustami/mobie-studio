@@ -204,7 +204,7 @@ impl AgentEngine {
                             .send(AgentUpdate::StatusChanged(AgentStatus::Observing))
                             .await;
 
-                        let raw_xml = match device.observe_ui().await {
+                        let mut raw_xml = match device.observe_ui().await {
                             Ok(xml) => xml,
                             Err(e) => {
                                 error!("Observe failed: {}", e);
@@ -230,6 +230,9 @@ impl AgentEngine {
                                 .await;
                             break 'agent_loop;
                         }
+
+                        // NEW: Robust Interaction - Wait for dynamic loading states
+                        Self::wait_for_idle(&device, &update_tx, &mut raw_xml).await;
 
                         // 2. THINK
                         let _ = update_tx
@@ -395,6 +398,45 @@ impl AgentEngine {
                 warn!("Failed to list ADB devices: {}", e);
                 let _ = update_tx.send(AgentUpdate::DeviceList(vec![])).await;
             }
+        }
+    }
+
+    /// Robust Interaction - detect and wait for dynamic loading states (spinners, etc.)
+    async fn wait_for_idle(
+        device: &DeviceBridge,
+        update_tx: &mpsc::Sender<AgentUpdate>,
+        current_xml: &mut String,
+    ) {
+        if !crate::device::xml_parser::is_loading(current_xml) {
+            return;
+        }
+
+        info!("Loading detected, waiting for idle...");
+        let _ = update_tx
+            .send(AgentUpdate::AgentReply(
+                "⏳ Loading detected, waiting for UI to stabilize...".to_string(),
+            ))
+            .await;
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(15);
+        let poll_interval = std::time::Duration::from_millis(1500);
+
+        while crate::device::xml_parser::is_loading(current_xml) && start.elapsed() < timeout {
+            tokio::time::sleep(poll_interval).await;
+            match device.observe_ui().await {
+                Ok(xml) => *current_xml = xml,
+                Err(e) => {
+                    warn!("Observe failed during wait_for_idle: {}", e);
+                    break;
+                }
+            }
+        }
+
+        if crate::device::xml_parser::is_loading(current_xml) {
+            warn!("Wait for idle timed out after {}s", timeout.as_secs());
+        } else {
+            info!("UI stabilized. Proceeding.");
         }
     }
 }
