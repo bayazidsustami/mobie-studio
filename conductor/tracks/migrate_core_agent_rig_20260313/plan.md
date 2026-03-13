@@ -18,17 +18,17 @@ Migrate the existing custom agent loop to the **Rig** framework, using a Rig-nat
     - [x] Write a failing test in `tests/rig_init.rs` that attempts to initialize a Rig agent.
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Rig Foundation' (Protocol in workflow.md) (74e082e)
 
-## Phase 2: Core Agent Re-architecture
-- [ ] Task: Implement `RigAgent` Structure
-    - [ ] Define the new agent structure in `src/agent/rig_agent.rs`.
-    - [ ] Write unit tests for agent initialization.
-- [ ] Task: Implement Rig-Native Loop
-    - [ ] Use Rig's `Agent` abstraction to handle the "Think" phase.
-    - [ ] Write tests to verify the agent can process a simple string prompt via Rig.
-- [ ] Task: Refactor `src/agent/mod.rs` to use `RigAgent`
-    - [ ] Replace the old loop with the new implementation.
-    - [ ] Ensure existing `Observe` and `Act` calls can be triggered.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Agent Re-architecture' (Protocol in workflow.md)
+## Phase 2: Core Agent Re-architecture [checkpoint: c85798c]
+- [x] Task: Implement `RigAgent` Structure (319c4e9)
+    - [x] Define the new agent structure in `src/agent/rig_agent.rs`.
+    - [x] Write unit tests for agent initialization.
+- [x] Task: Implement Rig-Native Loop (3d7c11d)
+    - [x] Use Rig's `Agent` abstraction to handle the "Think" phase.
+    - [x] Write tests to verify the agent can process a simple string prompt via Rig.
+- [x] Task: Refactor `src/agent/mod.rs` to use `RigAgent` (0559d5e)
+    - [x] Replace the old loop with the new implementation.
+    - [x] Ensure existing `Observe` and `Act` calls can be triggered.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Core Agent Re-architecture' (Protocol in workflow.md) (c85798c)
 
 ## Phase 3: Tooling & Action Mapping
 - [ ] Task: Map ADB Actions to Rig Tools
