@@ -5,6 +5,7 @@ use rig::providers::openai;
 use rig::completion::Prompt;
 use rig::client::CompletionClient;
 use std::sync::Arc;
+use reqwest::header::{HeaderMap, HeaderValue};
 
 pub struct RigAgent {
     config: LlmConfig,
@@ -19,17 +20,34 @@ impl RigAgent {
         }
     }
 
-    pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
+    fn build_client(&self) -> Result<openai::CompletionsClient<reqwest::Client>, anyhow::Error> {
         let api_key = if self.config.api_key.is_empty() {
             "sk-dummy".to_string()
         } else {
             self.config.api_key.clone()
         };
 
-        let client = openai::Client::builder()
+        let mut client_builder = reqwest::Client::builder();
+
+        // Include OpenRouter metadata headers. 
+        // These are harmless for other providers but required/recommended for OpenRouter.
+        let mut headers = HeaderMap::new();
+        headers.insert("HTTP-Referer", HeaderValue::from_static("https://mobie.studio"));
+        headers.insert("X-Title", HeaderValue::from_static("Mobie Studio"));
+        client_builder = client_builder.default_headers(headers);
+
+        let http_client = client_builder.build()?;
+
+        Ok(openai::Client::builder()
             .api_key(&api_key)
             .base_url(&self.config.base_url)
-            .build()?;
+            .http_client(http_client)
+            .build()?
+            .completions_api())
+    }
+
+    pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
+        let client = self.build_client()?;
         
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
@@ -51,16 +69,7 @@ impl RigAgent {
 
     // Keep the simple prompt for testing or simple queries
     pub async fn prompt(&self, goal: &str) -> Result<String, anyhow::Error> {
-        let api_key = if self.config.api_key.is_empty() {
-            "sk-dummy".to_string()
-        } else {
-            self.config.api_key.clone()
-        };
-
-        let client = openai::Client::builder()
-            .api_key(&api_key)
-            .base_url(&self.config.base_url)
-            .build()?;
+        let client = self.build_client()?;
         
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Respond with JSON actions.")
