@@ -39,13 +39,13 @@ Migrate the existing custom agent loop to the **Rig** framework, using a Rig-nat
     - [x] Verify the agent can use the "Observe" tool to see the screen state.
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Tooling & Action Mapping' (Protocol in workflow.md) (b8e384c)
 
-## Phase 4: OpenRouter Integration & Final Validation
+## Phase 4: OpenRouter Integration & Final Validation [checkpoint: 7b6107f]
 - [x] Task: Configure OpenRouter Provider via Rig (e0dc541)
     - [x] Implement or configure an OpenAI-compatible client for OpenRouter.
     - [x] Write tests verifying connectivity and completion.
-- [~] Task: Update and Run Full Integration Suite
-    - [ ] Run `tests/agent_history.rs` and other existing tests.
-    - [ ] Fix any regressions caused by the migration.
-- [ ] Task: Cleanup Legacy Code
-    - [ ] Remove redundant logic in `src/llm/` and old agent files.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: OpenRouter Integration & Final Validation' (Protocol in workflow.md)
+- [x] Task: Update and Run Full Integration Suite (47f5c4a)
+    - [x] Run `tests/agent_history.rs` and other existing tests.
+    - [x] Fix any regressions caused by the migration.
+- [x] Task: Cleanup Legacy Code (03d3907)
+    - [x] Remove redundant logic in `src/llm/` and old agent files.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: OpenRouter Integration & Final Validation' (Protocol in workflow.md) (7b6107f)
