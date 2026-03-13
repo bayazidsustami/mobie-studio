@@ -118,7 +118,8 @@ pub fn parse_ui_xml(raw_xml: &str) -> Vec<UiElement> {
             || !content_desc.is_empty()
             || clickable
             || scrollable
-            || focused;
+            || focused
+            || class.contains("ProgressBar");
 
         let mut current_node_index = None;
         if is_meaningful {
@@ -193,6 +194,22 @@ pub fn compress_xml(raw_xml: &str) -> String {
 
     let lines: Vec<String> = elements.iter().map(|e| e.to_string()).collect();
     lines.join("\n")
+}
+
+/// Detect if the screen contains common loading indicators (spinners, progress bars, etc.)
+pub fn is_loading(raw_xml: &str) -> bool {
+    let elements = parse_ui_xml(raw_xml);
+    elements.iter().any(|e| {
+        let class_lower = e.class.to_lowercase();
+        let text_lower = e.text.to_lowercase();
+        let desc_lower = e.content_desc.to_lowercase();
+
+        class_lower.contains("progressbar")
+            || text_lower.contains("loading")
+            || desc_lower.contains("loading")
+            || text_lower.contains("please wait")
+            || desc_lower.contains("please wait")
+    })
 }
 
 // ---------------------------------------------------------------------------
