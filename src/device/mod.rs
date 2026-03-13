@@ -38,16 +38,31 @@ impl DeviceBridge {
         args
     }
 
+    /// Execute an ADB command with a timeout.
+    async fn run_adb_timeout(
+        &self,
+        args: Vec<String>,
+        timeout: std::time::Duration,
+    ) -> Result<std::process::Output> {
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new("adb").args(&args).output()
+        });
+
+        match tokio::time::timeout(timeout, output).await {
+            Ok(Ok(Ok(out))) => Ok(out),
+            Ok(Ok(Err(e))) => Err(anyhow::anyhow!("ADB execution failed: {}", e)),
+            Ok(Err(e)) => Err(anyhow::anyhow!("ADB task panicked: {}", e)),
+            Err(_) => Err(anyhow::anyhow!("ADB command timed out after {:?}", timeout)),
+        }
+    }
+
     /// Checks if adb is available and any devices are connected
     pub async fn list_devices(&self) -> Result<Vec<String>> {
         info!("Executing adb devices...");
 
-        let output = tokio::task::spawn_blocking(|| {
-            Command::new("adb").arg("devices").output()
-        })
-        .await
-        .context("spawn_blocking for adb devices panicked")?
-        .context("Failed to execute adb devices")?;
+        let output = self
+            .run_adb_timeout(vec!["devices".to_string()], std::time::Duration::from_secs(5))
+            .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut devices = Vec::new();
@@ -68,17 +83,10 @@ impl DeviceBridge {
     /// Dumps the current UI hierarchy to XML via uiautomator
     pub async fn observe_ui(&self) -> Result<String> {
         info!("Dumping UI via adb shell uiautomator...");
-        let base = self.adb_base_args();
-        let base2 = base.clone();
+        let mut base = self.adb_base_args();
+        base.extend(["shell".to_string(), "uiautomator".to_string(), "dump".to_string()]);
 
-        let dump_cmd = tokio::task::spawn_blocking(move || {
-            let mut cmd = Command::new("adb");
-            cmd.args(&base).args(["shell", "uiautomator", "dump"]);
-            cmd.output()
-        })
-        .await
-        .context("spawn_blocking for uiautomator dump panicked")?
-        .context("Failed to run uiautomator dump")?;
+        let dump_cmd = self.run_adb_timeout(base, std::time::Duration::from_secs(10)).await?;
 
         if !dump_cmd.status.success() {
             let stderr = String::from_utf8_lossy(&dump_cmd.stderr);
@@ -86,14 +94,10 @@ impl DeviceBridge {
             return Err(anyhow::anyhow!("uiautomator dump failed: {}", stderr));
         }
 
-        let cat_cmd = tokio::task::spawn_blocking(move || {
-            let mut cmd = Command::new("adb");
-            cmd.args(&base2).args(["shell", "cat", "/sdcard/window_dump.xml"]);
-            cmd.output()
-        })
-        .await
-        .context("spawn_blocking for cat window_dump.xml panicked")?
-        .context("Failed to read window_dump.xml")?;
+        let mut base2 = self.adb_base_args();
+        base2.extend(["shell".to_string(), "cat".to_string(), "/sdcard/window_dump.xml".to_string()]);
+        
+        let cat_cmd = self.run_adb_timeout(base2, std::time::Duration::from_secs(5)).await?;
 
         if !cat_cmd.status.success() {
             let stderr = String::from_utf8_lossy(&cat_cmd.stderr);
@@ -107,17 +111,17 @@ impl DeviceBridge {
     /// Executes a tap action
     pub async fn tap(&self, x: u32, y: u32) -> Result<()> {
         info!("Executing tap at ({}, {})", x, y);
-        let base = self.adb_base_args();
-        let status = tokio::task::spawn_blocking(move || {
-            Command::new("adb")
-                .args(&base)
-                .args(["shell", "input", "tap", &x.to_string(), &y.to_string()])
-                .status()
-        })
-        .await
-        .context("spawn_blocking for tap panicked")??
-        .success();
-        if !status {
+        let mut args = self.adb_base_args();
+        args.extend([
+            "shell".to_string(),
+            "input".to_string(),
+            "tap".to_string(),
+            x.to_string(),
+            y.to_string(),
+        ]);
+        
+        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        if !output.status.success() {
             return Err(anyhow::anyhow!("Tap failed"));
         }
         Ok(())
@@ -128,26 +132,20 @@ impl DeviceBridge {
             "Executing swipe from ({}, {}) to ({}, {}) over {}ms",
             x1, y1, x2, y2, duration_ms
         );
-        let base = self.adb_base_args();
-        let status = tokio::task::spawn_blocking(move || {
-            Command::new("adb")
-                .args(&base)
-                .args([
-                    "shell",
-                    "input",
-                    "swipe",
-                    &x1.to_string(),
-                    &y1.to_string(),
-                    &x2.to_string(),
-                    &y2.to_string(),
-                    &duration_ms.to_string(),
-                ])
-                .status()
-        })
-        .await
-        .context("spawn_blocking for swipe panicked")??
-        .success();
-        if !status {
+        let mut args = self.adb_base_args();
+        args.extend([
+            "shell".to_string(),
+            "input".to_string(),
+            "swipe".to_string(),
+            x1.to_string(),
+            y1.to_string(),
+            x2.to_string(),
+            y2.to_string(),
+            duration_ms.to_string(),
+        ]);
+
+        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        if !output.status.success() {
             return Err(anyhow::anyhow!("Swipe failed"));
         }
         Ok(())
@@ -156,17 +154,11 @@ impl DeviceBridge {
     pub async fn input_text(&self, text: &str) -> Result<()> {
         info!("Executing input text: {}", text);
         let text = text.replace(' ', "%s");
-        let base = self.adb_base_args();
-        let status = tokio::task::spawn_blocking(move || {
-            Command::new("adb")
-                .args(&base)
-                .args(["shell", "input", "text", &text])
-                .status()
-        })
-        .await
-        .context("spawn_blocking for input_text panicked")??
-        .success();
-        if !status {
+        let mut args = self.adb_base_args();
+        args.extend(["shell".to_string(), "input".to_string(), "text".to_string(), text]);
+
+        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        if !output.status.success() {
             return Err(anyhow::anyhow!("Input text failed"));
         }
         Ok(())
@@ -174,17 +166,16 @@ impl DeviceBridge {
 
     pub async fn keyevent(&self, code: u32) -> Result<()> {
         info!("Executing keyevent {}", code);
-        let base = self.adb_base_args();
-        let status = tokio::task::spawn_blocking(move || {
-            Command::new("adb")
-                .args(&base)
-                .args(["shell", "input", "keyevent", &code.to_string()])
-                .status()
-        })
-        .await
-        .context("spawn_blocking for keyevent panicked")??
-        .success();
-        if !status {
+        let mut args = self.adb_base_args();
+        args.extend([
+            "shell".to_string(),
+            "input".to_string(),
+            "keyevent".to_string(),
+            code.to_string(),
+        ]);
+
+        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        if !output.status.success() {
             return Err(anyhow::anyhow!("Keyevent {} failed", code));
         }
         Ok(())

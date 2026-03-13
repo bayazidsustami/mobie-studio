@@ -421,8 +421,14 @@ impl AgentEngine {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(15);
         let poll_interval = std::time::Duration::from_millis(1500);
+        let mut poll_count = 0;
+        let max_polls = 10;
 
-        while crate::device::xml_parser::is_loading(current_xml) && start.elapsed() < timeout {
+        while crate::device::xml_parser::is_loading(current_xml)
+            && start.elapsed() < timeout
+            && poll_count < max_polls
+        {
+            poll_count += 1;
             tokio::time::sleep(poll_interval).await;
             match device.observe_ui().await {
                 Ok(xml) => *current_xml = xml,
