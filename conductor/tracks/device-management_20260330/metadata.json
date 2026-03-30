@@ -1,0 +1,8 @@
+{
+  "track_id": "device-management_20260330",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-03-30T10:00:00Z",
+  "updated_at": "2026-03-30T10:00:00Z",
+  "description": "update the device management, show all list registered emulator inculde connected devices and able to launch/close an emulator by just clicking start/stop icon."
+}
