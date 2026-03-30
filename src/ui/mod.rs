@@ -64,6 +64,7 @@ pub struct TextInput {
     text: String,
     cursor_offset: usize, // Character offset
     selection_anchor: Option<usize>, // Character offset
+    scroll_offset_y: Pixels,
     placeholder: String,
     is_masked: bool,
     
@@ -80,6 +81,7 @@ impl TextInput {
             text: initial_value,
             cursor_offset: char_len,
             selection_anchor: None,
+            scroll_offset_y: px(0.0),
             placeholder,
             is_masked: false,
             last_wrapped_lines: RefCell::new(None),
@@ -369,13 +371,16 @@ impl Element for TextInputElement {
             
             let lines = this.shape_text(window, available_width);
             let num_lines = lines.len().max(1);
-            line_height * num_lines as f32
+            // Limit to 3 lines height
+            line_height * (num_lines.min(3) as f32)
         };
 
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = height.into();
         style.min_size.height = line_height.into();
+        style.overflow.x = Overflow::Hidden;
+        style.overflow.y = Overflow::Hidden;
 
         (window.request_layout(style, [], app), ())
     }
@@ -402,7 +407,7 @@ impl Element for TextInputElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (is_focused, cursor_offset, selection_range, focus_handle, is_masked, text_len) = {
+        let (is_focused, cursor_offset, selection_range, focus_handle, is_masked, text_len, mut scroll_offset_y) = {
             let state = self.view.read(cx);
             (
                 state.focus_handle.is_focused(window),
@@ -411,6 +416,7 @@ impl Element for TextInputElement {
                 state.focus_handle.clone(),
                 state.is_masked,
                 state.text.chars().count(),
+                state.scroll_offset_y,
             )
         };
 
@@ -421,6 +427,45 @@ impl Element for TextInputElement {
         };
 
         let line_height = window.line_height();
+
+        // Calculate auto-scroll to keep cursor in view
+        let cursor_y = if text_len == 0 {
+            px(0.0)
+        } else {
+            let this = self.view.read(cx);
+            let target_byte_offset = this.byte_offset_for_char_offset(cursor_offset);
+            let mut y = px(0.0);
+            let mut start_byte = 0;
+            for line in &wrapped_lines {
+                let end_byte = start_byte + line.len();
+                if target_byte_offset >= start_byte && target_byte_offset <= end_byte {
+                    let pos = line.position_for_index(target_byte_offset - start_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                    y += pos.y;
+                    break;
+                }
+                y += line.size(line_height).height;
+                start_byte = end_byte;
+            }
+            y
+        };
+
+        // Scroll logic: if cursor is above view, scroll up. If below, scroll down.
+        if cursor_y < scroll_offset_y {
+            scroll_offset_y = cursor_y;
+        } else if cursor_y + line_height > scroll_offset_y + bounds.size.height {
+            scroll_offset_y = cursor_y + line_height - bounds.size.height;
+        }
+
+        // Clamp scroll offset
+        let total_height = wrapped_lines.iter().fold(px(0.0), |acc, l| acc + l.size(line_height).height);
+        scroll_offset_y = scroll_offset_y.max(px(0.0)).min((total_height - bounds.size.height).max(px(0.0)));
+
+        // Update the view's scroll offset if it changed
+        self.view.update(cx, |this, _| {
+            if this.scroll_offset_y != scroll_offset_y {
+                this.scroll_offset_y = scroll_offset_y;
+            }
+        });
 
         let (state_text, placeholder) = {
             let state = self.view.read(cx);
@@ -443,10 +488,11 @@ impl Element for TextInputElement {
             let wrapped_lines = wrapped_lines.clone();
             let state_text_ref = state_text_ref.clone();
             let placeholder = placeholder.clone();
+            let scroll_offset_y = scroll_offset_y;
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                     window.focus(&focus_handle);
-                    let local_point = event.position - bounds.origin;
+                    let local_point = event.position - bounds.origin + point(px(0.0), scroll_offset_y);
                     
                     let mut new_offset_chars = 0;
                     let mut current_y = px(0.0);
@@ -502,9 +548,10 @@ impl Element for TextInputElement {
             let bounds = bounds;
             let state_text_ref = state_text_ref.clone();
             let placeholder = placeholder.clone();
+            let scroll_offset_y = scroll_offset_y;
             move |event: &MouseMoveEvent, phase, _window, cx| {
                 if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && bounds.contains(&event.position) {
-                    let local_point = event.position - bounds.origin;
+                    let local_point = event.position - bounds.origin + point(px(0.0), scroll_offset_y);
                     let mut new_offset_chars = 0;
                     let mut current_y = px(0.0);
                     let mut current_line_start_byte = 0;
@@ -548,101 +595,114 @@ impl Element for TextInputElement {
             }
         });
 
-        // Paint selection highlight
-        if is_focused && !state_text.is_empty() {
-            if let Some(ref char_range) = selection_range {
-                // Convert character range to byte range for the painting loop
-                let this = self.view.read(cx);
-                let range = this.byte_offset_for_char_offset(char_range.start)..this.byte_offset_for_char_offset(char_range.end);
-                
-                let mut current_y = bounds.origin.y;
-                let mut line_start_byte_offset = 0;
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            // Paint selection highlight
+            if is_focused && !state_text.is_empty() {
+                if let Some(ref char_range) = selection_range {
+                    // Convert character range to byte range for the painting loop
+                    let this = self.view.read(cx);
+                    let range = this.byte_offset_for_char_offset(char_range.start)..this.byte_offset_for_char_offset(char_range.end);
+                    
+                    let mut current_y = bounds.origin.y - scroll_offset_y;
+                    let mut line_start_byte_offset = 0;
 
-                for line in &wrapped_lines {
-                    let line_len_bytes = line.len();
-                    let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
-                    let line_size = line.size(line_height);
+                    for line in &wrapped_lines {
+                        let line_len_bytes = line.len();
+                        let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
+                        let line_size = line.size(line_height);
 
-                    // Calculate intersection in byte space
-                    let sel_start_byte = range.start.max(line_start_byte_offset).min(line_end_byte_offset);
-                    let sel_end_byte = range.end.max(line_start_byte_offset).min(line_end_byte_offset);
+                        // Calculate intersection in byte space
+                        let sel_start_byte = range.start.max(line_start_byte_offset).min(line_end_byte_offset);
+                        let sel_end_byte = range.end.max(line_start_byte_offset).min(line_end_byte_offset);
 
-                    if sel_start_byte < sel_end_byte {
-                        let relative_start_byte = sel_start_byte - line_start_byte_offset;
-                        let relative_end_byte = sel_end_byte - line_start_byte_offset;
+                        if sel_start_byte < sel_end_byte {
+                            let relative_start_byte = sel_start_byte - line_start_byte_offset;
+                            let relative_end_byte = sel_end_byte - line_start_byte_offset;
 
-                        let start_x = if sel_start_byte == line_start_byte_offset {
-                            px(0.0)
-                        } else {
-                            line.position_for_index(relative_start_byte, line_height).unwrap_or(point(px(0.0), px(0.0))).x
-                        };
+                            let start_pos = line.position_for_index(relative_start_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                            let end_pos = line.position_for_index(relative_end_byte, line_height).unwrap_or(point(line_size.width, px(0.0)));
 
-                        let end_x = if sel_end_byte == line_end_byte_offset {
-                            line_size.width
-                        } else {
-                            line.position_for_index(relative_end_byte, line_height).unwrap_or(point(line_size.width, px(0.0))).x
-                        };
+                            let start_row = (start_pos.y / line_height).round() as i32;
+                            let end_row = (end_pos.y / line_height).round() as i32;
 
-                        window.paint_quad(fill(
-                            Bounds {
-                                origin: point(bounds.origin.x + start_x, current_y),
-                                size: size(end_x - start_x, line_height),
-                            },
-                            rgba(0x4488cc88),
-                        ));
+                            for row in start_row..=end_row {
+                                let row_y = line_height * row as f32;
+                                let row_start_x = if row == start_row {
+                                    start_pos.x
+                                } else {
+                                    px(0.0)
+                                };
+
+                                let row_end_x = if row == end_row {
+                                    end_pos.x
+                                } else {
+                                    line_size.width
+                                };
+
+                                if row_start_x < row_end_x {
+                                    window.paint_quad(fill(
+                                        Bounds {
+                                            origin: point(bounds.origin.x + row_start_x, current_y + row_y),
+                                            size: size(row_end_x - row_start_x, line_height),
+                                        },
+                                        rgba(0x4488cc88),
+                                    ));
+                                }
+                            }
+                        }
+                        line_start_byte_offset = line_end_byte_offset;
+                        current_y += line_size.height;
                     }
-                    line_start_byte_offset = line_end_byte_offset;
-                    current_y += line_size.height;
                 }
             }
-        }
 
-        // Paint wrapped lines
-        let mut current_origin = bounds.origin;
-        for line in &wrapped_lines {
-            let line_size = line.size(line_height);
-            let _ = line.paint(current_origin, line_height, TextAlign::Left, None, window, cx);
-            current_origin.y += line_size.height;
-        }
+            // Paint wrapped lines
+            let mut current_origin = bounds.origin - point(px(0.0), scroll_offset_y);
+            for line in &wrapped_lines {
+                let line_size = line.size(line_height);
+                let _ = line.paint(current_origin, line_height, TextAlign::Left, None, window, cx);
+                current_origin.y += line_size.height;
+            }
+
+            // Render cursor
+            if is_focused && selection_range.is_none() {
+                let mut current_y = bounds.origin.y - scroll_offset_y;
+                let mut line_start_byte_offset = 0;
+                let mut cursor_pos = None;
+
+                if state_text.is_empty() {
+                    cursor_pos = Some(bounds.origin);
+                } else {
+                    let target_byte_offset = self.view.read(cx).byte_offset_for_char_offset(cursor_offset);
+                    for line in &wrapped_lines {
+                        let line_len_bytes = line.len();
+                        let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
+                        let line_size = line.size(line_height);
+
+                        if target_byte_offset >= line_start_byte_offset && target_byte_offset <= line_end_byte_offset {
+                            let relative_byte = target_byte_offset - line_start_byte_offset;
+                            let pos = line.position_for_index(relative_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                            cursor_pos = Some(point(bounds.origin.x + pos.x, current_y + pos.y));
+                            break;
+                        }
+                        line_start_byte_offset = line_end_byte_offset;
+                        current_y += line_size.height;
+                    }
+                }
+
+                if let Some(pos) = cursor_pos {
+                    window.paint_quad(fill(
+                        Bounds {
+                            origin: pos,
+                            size: size(px(2.0), line_height),
+                        },
+                        rgb(0xe94560),
+                    ));
+                }
+            }
+        });
 
         window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.view.clone()), cx);
-
-        // Render cursor
-        if is_focused && selection_range.is_none() {
-            let mut current_y = bounds.origin.y;
-            let mut line_start_byte_offset = 0;
-            let mut cursor_pos = None;
-
-            if state_text.is_empty() {
-                cursor_pos = Some(bounds.origin);
-            } else {
-                let target_byte_offset = self.view.read(cx).byte_offset_for_char_offset(cursor_offset);
-                for line in &wrapped_lines {
-                    let line_len_bytes = line.len();
-                    let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
-                    let line_size = line.size(line_height);
-
-                    if target_byte_offset >= line_start_byte_offset && target_byte_offset <= line_end_byte_offset {
-                        let relative_byte = target_byte_offset - line_start_byte_offset;
-                        let pos = line.position_for_index(relative_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
-                        cursor_pos = Some(point(bounds.origin.x + pos.x, current_y + pos.y));
-                        break;
-                    }
-                    line_start_byte_offset = line_end_byte_offset;
-                    current_y += line_size.height;
-                }
-            }
-
-            if let Some(pos) = cursor_pos {
-                window.paint_quad(fill(
-                    Bounds {
-                        origin: pos,
-                        size: size(px(2.0), line_height),
-                    },
-                    rgb(0xe94560),
-                ));
-            }
-        }
     }
 
     fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
@@ -1201,7 +1261,8 @@ impl MobieWorkspace {
 
                         msg_row.child(
                             div()
-                                .w(px(500.0)) // Use fixed width to force wrapping
+                                .max_w(px(600.0)) // Max width for message bubbles
+                                .w_full()
                                 .bg(bg)
                                 .rounded(px(12.0))
                                 .p(px(12.0))
@@ -1234,11 +1295,14 @@ impl MobieWorkspace {
             .border_t_1()
             .border_color(rgb(0x2a2a4a))
             .p(px(16.0))
+            .w_full()
             .child(
                 div()
+                    .w_full()
                     .bg(rgb(0x16213e))
                     .rounded(px(12.0))
                     .p(px(14.0))
+                    .flex()
                     .flex_col()
                     .child(self.chat_input.clone())
                     .when(is_idle && !self.chat_input.read(cx).text().is_empty(), |d| {

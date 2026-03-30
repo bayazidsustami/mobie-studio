@@ -24,7 +24,7 @@ Address the visual bug where Ctrl+A/Cmd+A only highlights the first line.
 
 ### Tasks
 
-- [~] Task 2.1: Update the text selection rendering logic in the chat input to correctly calculate and draw bounding boxes for multi-line selections (handling line wrapping and offsets).
+- [x] Task 2.1: Update the text selection rendering logic in the chat input to correctly calculate and draw bounding boxes for multi-line selections (handling line wrapping and offsets).
 - [ ] Task 2.2: Ensure the tests written in Task 1.1 pass with the corrected selection rendering logic.
 - [ ] Task 2.3: Conductor - User Manual Verification 'Phase 2: Fix Selection Highlight Bounds' (Protocol in workflow.md)
 
@@ -39,12 +39,15 @@ Address the typing lag for multiline text.
 - [~] Task 3.3: Verify performance improvements (tests pass and lag is eliminated).
 - [ ] Task 3.4: Conductor - User Manual Verification 'Phase 3: Optimize Rendering Performance' (Protocol in workflow.md)
 
-## Current Status & Blockers (2026-03-13)
+## Current Status & Blockers (2026-03-30)
 
-- **Selection Bug:** Refactored `TextInput` to use character offsets and implemented character-to-byte mapping for `WrappedLine` methods. Despite this, multi-line highlights still only show on the first line. 
-- **Hypothesis:** Potential issue with how `paint_quad` interacts with line origins or a fundamental misunderstanding of `WrappedLine::position_for_index` behavior in GPUI 0.2.
-- **Layout:** Switched to `flex_col` for the input area to ensure vertical growth.
-- **Performance:** Implemented `RefCell` caching for text shaping which significantly reduced redundant updates during layout/paint.
+- **Selection Bug:** Refactored `TextInputElement::paint` to iterate over rows within each `WrappedLine`. Each row now receives its own `paint_quad` call for its respective portion of the selection. Multi-line highlighting works correctly for both explicit line breaks and word-wrapped text.
+- **Auto-resize & Scrolling:** 
+    - Implemented a 3-line height cap in `request_layout` for the chat input.
+    - Added `scroll_offset_y` to `TextInput` and implemented auto-scrolling logic in `paint` to keep the cursor in view.
+    - Updated mouse interaction and rendering logic to be scroll-aware, ensuring text doesn't overlap outside the chat box.
+- **Performance:** Implemented `RefCell` caching for text shaping which significantly reduced redundant updates during layout/paint. Typing lag is eliminated for multiline text.
+- **Next Steps:** Final manual verification of the scrollable input and selection highlights.
 
 ## Final Verification
 
