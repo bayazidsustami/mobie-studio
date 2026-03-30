@@ -3,11 +3,11 @@
 **Track ID:** fix-chat-input-lag_20260313
 **Spec:** spec.md
 **Created:** 2026-03-13
-**Status:** [~] In Progress
+**Status:** [x] Completed
 
 ## Overview
 
-This track addresses performance degradation and visual text selection bugs in the GPUI-based chat input. We will investigate the custom text input implementation in `src/ui/` to optimize rendering/layout cycles for multiline text and fix the bounds calculation for text selection highlights.
+This track addressed performance degradation and visual text selection bugs in the GPUI-based chat input. We optimized rendering/layout cycles for multiline text and fixed the bounds calculation for text selection highlights, along with implementing a 3-line height cap and auto-scrolling.
 
 ## Phase 1: Diagnostics and Test Setup [checkpoint: 8859e15]
 
@@ -25,8 +25,8 @@ Address the visual bug where Ctrl+A/Cmd+A only highlights the first line.
 ### Tasks
 
 - [x] Task 2.1: Update the text selection rendering logic in the chat input to correctly calculate and draw bounding boxes for multi-line selections (handling line wrapping and offsets).
-- [ ] Task 2.2: Ensure the tests written in Task 1.1 pass with the corrected selection rendering logic.
-- [ ] Task 2.3: Conductor - User Manual Verification 'Phase 2: Fix Selection Highlight Bounds' (Protocol in workflow.md)
+- [x] Task 2.2: Ensure the tests written in Task 1.1 pass with the corrected selection rendering logic.
+- [x] Task 2.3: Conductor - User Manual Verification 'Phase 2: Fix Selection Highlight Bounds' (Protocol in workflow.md)
 
 ## Phase 3: Optimize Rendering Performance
 
@@ -36,8 +36,8 @@ Address the typing lag for multiline text.
 
 - [x] Task 3.1: Profile or analyze the input component's update cycle to identify redundant layout recalculations or repaints when typing long text.
 - [x] Task 3.2: Implement memoization, text shaping caching, or layout constraints in the GPUI component to ensure O(1) or minimal update cost per keystroke regardless of total text length.
-- [~] Task 3.3: Verify performance improvements (tests pass and lag is eliminated).
-- [ ] Task 3.4: Conductor - User Manual Verification 'Phase 3: Optimize Rendering Performance' (Protocol in workflow.md)
+- [x] Task 3.3: Verify performance improvements (tests pass and lag is eliminated).
+- [x] Task 3.4: Conductor - User Manual Verification 'Phase 3: Optimize Rendering Performance' (Protocol in workflow.md)
 
 ## Current Status & Blockers (2026-03-30)
 
@@ -47,14 +47,13 @@ Address the typing lag for multiline text.
     - Added `scroll_offset_y` to `TextInput` and implemented auto-scrolling logic in `paint` to keep the cursor in view.
     - Updated mouse interaction and rendering logic to be scroll-aware, ensuring text doesn't overlap outside the chat box.
 - **Performance:** Implemented `RefCell` caching for text shaping which significantly reduced redundant updates during layout/paint. Typing lag is eliminated for multiline text.
-- **Next Steps:** Final manual verification of the scrollable input and selection highlights.
 
 ## Final Verification
 
-- [ ] All acceptance criteria met
-- [ ] Tests passing
-- [ ] Code coverage maintained
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] Tests passing
+- [x] Code coverage maintained
+- [x] Ready for review
 
 ---
 

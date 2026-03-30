@@ -7,5 +7,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 - [x] **Track: Improve Testing Agent**
 *Link: [./tracks/improve_testing_agent_20260312/](./tracks/improve_testing_agent_20260312/)*
 
-- [~] **Track: Fix Chat Input Lag and Selection Issue**
+- [x] **Track: Fix Chat Input Lag and Selection Issue**
 *Link: [./tracks/fix-chat-input-lag_20260313/](./tracks/fix-chat-input-lag_20260313/)*
