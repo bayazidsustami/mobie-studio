@@ -12,6 +12,7 @@ use crate::agent::action::{Action, SwipeDirection};
 /// Trait for executing shell commands, allowing for mocking in tests.
 pub trait CommandRunner: Send + Sync + std::fmt::Debug {
     fn run(&self, cmd: &str, args: &[String]) -> Result<std::process::Output>;
+    fn spawn(&self, cmd: &str, args: &[String]) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -23,6 +24,14 @@ impl CommandRunner for RealCommandRunner {
             .args(args)
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to execute {} command: {}", cmd, e))
+    }
+
+    fn spawn(&self, cmd: &str, args: &[String]) -> Result<()> {
+        Command::new(cmd)
+            .args(args)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("Failed to spawn {} command: {}", cmd, e))
     }
 }
 
@@ -314,5 +323,38 @@ impl DeviceBridge {
             }
         }
         Ok(avds)
+    }
+
+    /// Launches an emulator using its AVD name.
+    pub async fn launch_emulator(&self, name: &str) -> Result<()> {
+        info!("Launching emulator {}...", name);
+        let runner = self.runner.clone();
+        let name = name.to_string();
+        
+        tokio::task::spawn_blocking(move || {
+            runner.spawn("emulator", &["-avd".to_string(), name])
+        })
+        .await
+        .context("spawn_blocking for launch_emulator panicked")?
+    }
+
+    /// Stops the currently selected emulator.
+    pub async fn stop_emulator(&self) -> Result<()> {
+        let id = self.selected_device().context("No device selected to stop")?;
+        info!("Stopping emulator {}...", id);
+
+        let output = self
+            .run_command_timeout(
+                "adb".to_string(),
+                vec!["-s".to_string(), id.to_string(), "emu".to_string(), "kill".to_string()],
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Stop emulator failed: {}", stderr));
+        }
+        Ok(())
     }
 }
