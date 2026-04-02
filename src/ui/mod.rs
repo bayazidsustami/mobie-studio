@@ -3,6 +3,7 @@ use gpui::*;
 use smallvec::SmallVec;
 use std::ops::Range;
 use tokio::sync::mpsc;
+use tracing::info;
 
 use crate::agent::{AgentMessage, AgentStatus, AgentUpdate};
 use crate::config::{save_config, AppConfig};
@@ -992,11 +993,7 @@ impl MobieWorkspace {
                                         .find(|(_, s)| *s == DeviceStatus::Online)
                                         .map(|(id, _)| id.clone());
                                 }
-                                workspace.messages.push(ChatMessage {
-                                    role: ChatRole::System,
-                                    content: format!("✅ Found {} device(s)/AVDs.", count),
-                                });
-                                workspace.chat_scroll_handle.scroll_to_bottom();
+                                info!("Found {} device(s)/AVDs.", count);
                             }
                         }
                         cx.notify();
@@ -1267,15 +1264,19 @@ impl MobieWorkspace {
     }
 
     fn render_device_section(&self, cx: &mut Context<Self>) -> Div {
-        let mut section = div().flex().flex_col().gap(px(6.0)).child(
+        let mut section = div().flex().flex_col().gap(px(8.0)).child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgba(0x2a2a4a88))
+                .mb_1()
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(FontWeight::BOLD)
                         .text_color(rgb(0x666688))
                         .child("DEVICES"),
                 )
@@ -1284,6 +1285,7 @@ impl MobieWorkspace {
                         .text_xs()
                         .text_color(rgb(0x4488cc))
                         .cursor_pointer()
+                        .hover(|s| s.text_color(rgb(0x66aaff)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
@@ -1300,6 +1302,7 @@ impl MobieWorkspace {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
+                    .py_2()
                     .child(
                         div()
                             .w(px(8.0))
@@ -1318,11 +1321,13 @@ impl MobieWorkspace {
             let cmd_tx = self.cmd_tx.clone();
             for (dev, status) in &self.devices {
                 let is_selected = self.selected_device.as_deref() == Some(dev.as_str());
-                let dot_color = match status {
-                    DeviceStatus::Online => rgb(0x44ff88),
-                    DeviceStatus::Launching => rgb(0xffcc44),
-                    DeviceStatus::Offline => rgb(0x888888),
+
+                let (dot_color, dot_border) = match status {
+                    DeviceStatus::Online => (rgb(0x44ff88), rgb(0x228844)),
+                    DeviceStatus::Launching => (rgb(0xffcc44), rgb(0x886622)),
+                    DeviceStatus::Offline => (rgb(0x555566), rgb(0x333344)),
                 };
+
                 let text_color = if is_selected {
                     rgb(0xeeeeff)
                 } else {
@@ -1338,12 +1343,18 @@ impl MobieWorkspace {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .p_1()
+                        .gap(px(4.0))
+                        .py_2()
+                        .px_1()
+                        .rounded(px(6.0))
+                        .when(is_selected, |s| s.bg(rgba(0x4488cc22)))
                         .child(
                             div()
                                 .flex()
+                                .flex_1()
+                                .min_w_0()
                                 .items_center()
-                                .gap(px(6.0))
+                                .gap(px(8.0))
                                 .cursor_pointer()
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -1366,60 +1377,99 @@ impl MobieWorkspace {
                                         }
                                     }),
                                 )
-                                .child(div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot_color))
-                                .child(div().text_sm().text_color(text_color).child(dev.clone())),
+                                .child(
+                                    div()
+                                        .w(px(10.0))
+                                        .h(px(10.0))
+                                        .rounded(px(5.0))
+                                        .bg(dot_color)
+                                        .border_1()
+                                        .border_color(dot_border)
+                                        .flex_shrink_0(),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .text_sm()
+                                        .font_weight(if is_selected {
+                                            FontWeight::SEMIBOLD
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .text_color(text_color)
+                                        .child(dev.clone()),
+                                ),
                         )
-                        .child(div().flex().gap(px(4.0)).child(match status {
-                            DeviceStatus::Offline => {
-                                let name = dev.clone();
-                                let tx = tx.clone();
-                                div()
+                        .child(
+                            div().flex_shrink_0().child(match status {
+                                DeviceStatus::Offline => {
+                                    let name = dev.clone();
+                                    let tx = tx.clone();
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded(px(4.0))
+                                        .bg(rgba(0x44ff8811))
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0x44ff88))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(rgba(0x44ff8822)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |_, _, _, cx| {
+                                                let tx2 = tx.clone();
+                                                let n = name.clone();
+                                                cx.background_executor()
+                                                    .spawn(async move {
+                                                        let _ = tx2
+                                                            .send(AgentMessage::LaunchEmulator(n))
+                                                            .await;
+                                                    })
+                                                    .detach();
+                                            }),
+                                        )
+                                        .child("▶ Start")
+                                }
+                                DeviceStatus::Online => {
+                                    let id = dev.clone();
+                                    let tx = tx.clone();
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded(px(4.0))
+                                        .bg(rgba(0xff444411))
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0xff4444))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(rgba(0xff444422)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |_, _, _, cx| {
+                                                let tx2 = tx.clone();
+                                                let i = id.clone();
+                                                cx.background_executor()
+                                                    .spawn(async move {
+                                                        let _ = tx2
+                                                            .send(AgentMessage::StopEmulator(i))
+                                                            .await;
+                                                    })
+                                                    .detach();
+                                            }),
+                                        )
+                                        .child("■ Stop")
+                                }
+                                DeviceStatus::Launching => div()
+                                    .px_2()
+                                    .py_1()
                                     .text_xs()
-                                    .text_color(rgb(0x44ff88))
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |_, _, _, cx| {
-                                            let tx2 = tx.clone();
-                                            let n = name.clone();
-                                            cx.background_executor()
-                                                .spawn(async move {
-                                                    let _ = tx2
-                                                        .send(AgentMessage::LaunchEmulator(n))
-                                                        .await;
-                                                })
-                                                .detach();
-                                        }),
-                                    )
-                                    .child("▶ Start")
-                            }
-                            DeviceStatus::Online => {
-                                let id = dev.clone();
-                                let tx = tx.clone();
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0xff4444))
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |_, _, _, cx| {
-                                            let tx2 = tx.clone();
-                                            let i = id.clone();
-                                            cx.background_executor()
-                                                .spawn(async move {
-                                                    let _ = tx2
-                                                        .send(AgentMessage::StopEmulator(i))
-                                                        .await;
-                                                })
-                                                .detach();
-                                        }),
-                                    )
-                                    .child("■ Stop")
-                            }
-                            DeviceStatus::Launching => {
-                                div().text_xs().text_color(rgb(0x888888)).child("...")
-                            }
-                        })),
+                                    .text_color(rgb(0x888899))
+                                    .child("..."),
+                            }),
+                        ),
                 );
             }
         }
@@ -1471,12 +1521,13 @@ impl MobieWorkspace {
                     .p(px(16.0))
                     .flex()
                     .flex_col()
-                    .gap(px(12.0))
+                    .gap(px(16.0))
                     .children(self.messages.iter().map(|msg| {
-                        let (bg, text_col, is_user) = match msg.role {
-                            ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff), true),
-                            ChatRole::Agent => (rgb(0x0f3460), rgb(0xccddff), false),
-                            ChatRole::System => (rgb(0x2a2a4a), rgb(0x888899), false),
+                        let is_user = matches!(msg.role, ChatRole::User);
+                        let (bg, text_col) = match msg.role {
+                            ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff)),
+                            ChatRole::Agent => (rgb(0x0f3460), rgb(0xccddff)),
+                            ChatRole::System => (rgb(0x2a2a4a), rgb(0x888899)),
                         };
 
                         let label = match msg.role {
@@ -1485,37 +1536,35 @@ impl MobieWorkspace {
                             ChatRole::System => "System",
                         };
 
-                        let msg_row = if is_user {
-                            div().flex().flex_row_reverse()
-                        } else {
-                            div().flex()
-                        };
-
-                        msg_row.child(
-                            div()
-                                .max_w(px(600.0)) // Max width for message bubbles
-                                .w_full()
-                                .bg(bg)
-                                .rounded(px(12.0))
-                                .p(px(12.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(0x666688))
-                                        .child(label.to_string()),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(text_col)
-                                        .whitespace_normal() // Ensure text wraps
-                                        .child(msg.content.clone()),
-                                ),
-                        )
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_end()
+                            .when(!is_user, |d| d.items_start())
+                            .child(
+                                div()
+                                    .max_w(px(600.0))
+                                    .flex()
+                                    .flex_col()
+                                    .flex_shrink_0()
+                                    .bg(bg)
+                                    .rounded(px(12.0))
+                                    .p(px(12.0))
+                                    .gap(px(4.0))
+                                    .text_sm()
+                                    .text_color(text_col)
+                                    .whitespace_normal()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(0x666688))
+                                            .child(label.to_string()),
+                                    )
+                                    .child(msg.content.clone()),
+                            )
                     })),
             )
     }
