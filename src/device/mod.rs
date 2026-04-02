@@ -4,18 +4,70 @@ pub use xml_parser::compress_xml;
 
 use anyhow::{Context, Result};
 use std::process::Command;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::agent::action::{Action, SwipeDirection};
 
-#[derive(Default, Clone, Debug)]
+/// Trait for executing shell commands, allowing for mocking in tests.
+pub trait CommandRunner: Send + Sync + std::fmt::Debug {
+    fn run(&self, cmd: &str, args: &[String]) -> Result<std::process::Output>;
+    fn spawn(&self, cmd: &str, args: &[String]) -> Result<()>;
+}
+
+#[derive(Debug)]
+struct RealCommandRunner;
+
+impl CommandRunner for RealCommandRunner {
+    fn run(&self, cmd: &str, args: &[String]) -> Result<std::process::Output> {
+        Command::new(cmd)
+            .args(args)
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to execute {} command: {}", cmd, e))
+    }
+
+    fn spawn(&self, cmd: &str, args: &[String]) -> Result<()> {
+        Command::new(cmd)
+            .args(args)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("Failed to spawn {} command: {}", cmd, e))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeviceStatus {
+    Offline,
+    Launching,
+    Online,
+}
+
+#[derive(Clone, Debug)]
 pub struct DeviceBridge {
     device_id: Option<String>,
+    runner: Arc<dyn CommandRunner>,
+}
+
+impl Default for DeviceBridge {
+    fn default() -> Self {
+        Self {
+            device_id: None,
+            runner: Arc::new(RealCommandRunner),
+        }
+    }
 }
 
 impl DeviceBridge {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a new DeviceBridge with a custom command runner (useful for testing).
+    pub fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
+        Self {
+            device_id: None,
+            runner,
+        }
     }
 
     /// Returns the currently selected device ID, if any.
@@ -38,21 +90,28 @@ impl DeviceBridge {
         args
     }
 
-    /// Execute an ADB command with a timeout.
-    async fn run_adb_timeout(
+    /// Execute a command with a timeout.
+    async fn run_command_timeout(
         &self,
+        cmd: String,
         args: Vec<String>,
         timeout: std::time::Duration,
     ) -> Result<std::process::Output> {
-        let output = tokio::task::spawn_blocking(move || {
-            Command::new("adb").args(&args).output()
-        });
+        let runner = self.runner.clone();
+        let cmd_inner = cmd.clone();
+        let args_inner = args.clone();
+
+        let output = tokio::task::spawn_blocking(move || runner.run(&cmd_inner, &args_inner));
 
         match tokio::time::timeout(timeout, output).await {
             Ok(Ok(Ok(out))) => Ok(out),
-            Ok(Ok(Err(e))) => Err(anyhow::anyhow!("ADB execution failed: {}", e)),
-            Ok(Err(e)) => Err(anyhow::anyhow!("ADB task panicked: {}", e)),
-            Err(_) => Err(anyhow::anyhow!("ADB command timed out after {:?}", timeout)),
+            Ok(Ok(Err(e))) => Err(anyhow::anyhow!("{} execution failed: {}", cmd, e)),
+            Ok(Err(e)) => Err(anyhow::anyhow!("{} task panicked: {}", cmd, e)),
+            Err(_) => Err(anyhow::anyhow!(
+                "{} command timed out after {:?}",
+                cmd,
+                timeout
+            )),
         }
     }
 
@@ -61,7 +120,11 @@ impl DeviceBridge {
         info!("Executing adb devices...");
 
         let output = self
-            .run_adb_timeout(vec!["devices".to_string()], std::time::Duration::from_secs(5))
+            .run_command_timeout(
+                "adb".to_string(),
+                vec!["devices".to_string()],
+                std::time::Duration::from_secs(5),
+            )
             .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -84,9 +147,15 @@ impl DeviceBridge {
     pub async fn observe_ui(&self) -> Result<String> {
         info!("Dumping UI via adb shell uiautomator...");
         let mut base = self.adb_base_args();
-        base.extend(["shell".to_string(), "uiautomator".to_string(), "dump".to_string()]);
+        base.extend([
+            "shell".to_string(),
+            "uiautomator".to_string(),
+            "dump".to_string(),
+        ]);
 
-        let dump_cmd = self.run_adb_timeout(base, std::time::Duration::from_secs(10)).await?;
+        let dump_cmd = self
+            .run_command_timeout("adb".to_string(), base, std::time::Duration::from_secs(10))
+            .await?;
 
         if !dump_cmd.status.success() {
             let stderr = String::from_utf8_lossy(&dump_cmd.stderr);
@@ -95,9 +164,15 @@ impl DeviceBridge {
         }
 
         let mut base2 = self.adb_base_args();
-        base2.extend(["shell".to_string(), "cat".to_string(), "/sdcard/window_dump.xml".to_string()]);
-        
-        let cat_cmd = self.run_adb_timeout(base2, std::time::Duration::from_secs(5)).await?;
+        base2.extend([
+            "shell".to_string(),
+            "cat".to_string(),
+            "/sdcard/window_dump.xml".to_string(),
+        ]);
+
+        let cat_cmd = self
+            .run_command_timeout("adb".to_string(), base2, std::time::Duration::from_secs(5))
+            .await?;
 
         if !cat_cmd.status.success() {
             let stderr = String::from_utf8_lossy(&cat_cmd.stderr);
@@ -119,8 +194,10 @@ impl DeviceBridge {
             x.to_string(),
             y.to_string(),
         ]);
-        
-        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+
+        let output = self
+            .run_command_timeout("adb".to_string(), args, std::time::Duration::from_secs(5))
+            .await?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("Tap failed"));
         }
@@ -144,7 +221,9 @@ impl DeviceBridge {
             duration_ms.to_string(),
         ]);
 
-        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        let output = self
+            .run_command_timeout("adb".to_string(), args, std::time::Duration::from_secs(5))
+            .await?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("Swipe failed"));
         }
@@ -155,9 +234,16 @@ impl DeviceBridge {
         info!("Executing input text: {}", text);
         let text = text.replace(' ', "%s");
         let mut args = self.adb_base_args();
-        args.extend(["shell".to_string(), "input".to_string(), "text".to_string(), text]);
+        args.extend([
+            "shell".to_string(),
+            "input".to_string(),
+            "text".to_string(),
+            text.to_string(),
+        ]);
 
-        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        let output = self
+            .run_command_timeout("adb".to_string(), args, std::time::Duration::from_secs(5))
+            .await?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("Input text failed"));
         }
@@ -174,7 +260,9 @@ impl DeviceBridge {
             code.to_string(),
         ]);
 
-        let output = self.run_adb_timeout(args, std::time::Duration::from_secs(5)).await?;
+        let output = self
+            .run_command_timeout("adb".to_string(), args, std::time::Duration::from_secs(5))
+            .await?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("Keyevent {} failed", code));
         }
@@ -204,7 +292,7 @@ impl DeviceBridge {
                 ..
             } => {
                 let (w, h) = self.get_screen_size().await.unwrap_or((1080, 2400));
-                let dist = distance.unwrap_or_else(|| match direction {
+                let dist = distance.unwrap_or(match direction {
                     SwipeDirection::Up | SwipeDirection::Down => h / 3,
                     SwipeDirection::Left | SwipeDirection::Right => w / 2,
                 });
@@ -229,20 +317,17 @@ impl DeviceBridge {
     pub async fn get_screen_size(&self) -> Result<(u32, u32)> {
         info!("Fetching screen size via wm size...");
         let base = self.adb_base_args();
-        let output = tokio::task::spawn_blocking(move || {
-            Command::new("adb")
-                .args(&base)
-                .args(["shell", "wm", "size"])
-                .output()
-        })
-        .await
-        .context("spawn_blocking for wm size panicked")?
-        .context("Failed to run wm size")?;
+        let mut args = base;
+        args.extend(["shell".to_string(), "wm".to_string(), "size".to_string()]);
+
+        let output = self
+            .run_command_timeout("adb".to_string(), args, std::time::Duration::from_secs(5))
+            .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         // Typical output: "Physical size: 1080x2400"
         if let Some(line) = stdout.lines().next() {
-            if let Some(size_str) = line.split(':').last() {
+            if let Some(size_str) = line.split(':').next_back() {
                 let parts: Vec<&str> = size_str.trim().split('x').collect();
                 if parts.len() == 2 {
                     let w = parts[0].parse::<u32>()?;
@@ -255,5 +340,148 @@ impl DeviceBridge {
             "Failed to parse screen size from: {}",
             stdout
         ))
+    }
+
+    /// List all registered Android Virtual Devices (AVDs).
+    pub async fn list_avds(&self) -> Result<Vec<String>> {
+        info!("Listing AVDs via emulator -list-avds...");
+        let output = self
+            .run_command_timeout(
+                "emulator".to_string(),
+                vec!["-list-avds".to_string()],
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut avds = Vec::new();
+
+        for line in stdout.lines() {
+            let line = line.trim();
+            if !line.is_empty() {
+                avds.push(line.to_string());
+            }
+        }
+        Ok(avds)
+    }
+
+    /// Launches an emulator using its AVD name.
+    pub async fn launch_emulator(&self, name: &str) -> Result<()> {
+        info!("Launching emulator {}...", name);
+        let runner = self.runner.clone();
+        let name = name.to_string();
+
+        tokio::task::spawn_blocking(move || runner.spawn("emulator", &["-avd".to_string(), name]))
+            .await
+            .context("spawn_blocking for launch_emulator panicked")?
+    }
+
+    /// Stops the currently selected emulator.
+    pub async fn stop_emulator(&self) -> Result<()> {
+        let id = self
+            .selected_device()
+            .context("No device selected to stop")?;
+        info!("Stopping emulator {}...", id);
+
+        let output = self
+            .run_command_timeout(
+                "adb".to_string(),
+                vec![
+                    "-s".to_string(),
+                    id.to_string(),
+                    "emu".to_string(),
+                    "kill".to_string(),
+                ],
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Stop emulator failed: {}", stderr));
+        }
+        Ok(())
+    }
+
+    /// Gets the current status of an AVD and its serial if online.
+    pub async fn get_avd_status(&self, avd_name: &str) -> Result<DeviceStatus> {
+        let devices = self.list_devices().await?;
+
+        for id in devices {
+            if id.starts_with("emulator-") {
+                let name_output = self
+                    .run_command_timeout(
+                        "adb".to_string(),
+                        vec![
+                            "-s".to_string(),
+                            id.clone(),
+                            "emu".to_string(),
+                            "avd".to_string(),
+                            "name".to_string(),
+                        ],
+                        std::time::Duration::from_secs(2),
+                    )
+                    .await;
+
+                if let Ok(out) = name_output {
+                    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if name.contains(avd_name) {
+                        let boot_output = self
+                            .run_command_timeout(
+                                "adb".to_string(),
+                                vec![
+                                    "-s".to_string(),
+                                    id,
+                                    "shell".to_string(),
+                                    "getprop".to_string(),
+                                    "sys.boot_completed".to_string(),
+                                ],
+                                std::time::Duration::from_secs(2),
+                            )
+                            .await;
+
+                        if let Ok(out) = boot_output {
+                            if String::from_utf8_lossy(&out.stdout).trim() == "1" {
+                                return Ok(DeviceStatus::Online);
+                            } else {
+                                return Ok(DeviceStatus::Launching);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(DeviceStatus::Offline)
+    }
+
+    /// Internal helper to find serial for an AVD name
+    pub async fn find_serial_for_avd(&self, avd_name: &str) -> Result<Option<String>> {
+        let devices = self.list_devices().await?;
+        for id in devices {
+            if id.starts_with("emulator-") {
+                let name_output = self
+                    .run_command_timeout(
+                        "adb".to_string(),
+                        vec![
+                            "-s".to_string(),
+                            id.clone(),
+                            "emu".to_string(),
+                            "avd".to_string(),
+                            "name".to_string(),
+                        ],
+                        std::time::Duration::from_secs(2),
+                    )
+                    .await;
+
+                if let Ok(out) = name_output {
+                    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if name.contains(avd_name) {
+                        return Ok(Some(id));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 }

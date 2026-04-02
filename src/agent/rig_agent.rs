@@ -1,11 +1,11 @@
-use crate::llm::LlmConfig;
+use crate::agent::tools::{Input, KeyEvent, Observe, Swipe, Tap};
 use crate::device::DeviceBridge;
-use crate::agent::tools::{Tap, Input, Swipe, KeyEvent, Observe};
-use rig::providers::openai;
-use rig::completion::Prompt;
-use rig::client::CompletionClient;
-use std::sync::Arc;
+use crate::llm::LlmConfig;
 use reqwest::header::{HeaderMap, HeaderValue};
+use rig::client::CompletionClient;
+use rig::completion::Prompt;
+use rig::providers::openai;
+use std::sync::Arc;
 
 pub struct RigAgent {
     config: LlmConfig,
@@ -14,9 +14,9 @@ pub struct RigAgent {
 
 impl RigAgent {
     pub fn new(config: LlmConfig, device: DeviceBridge) -> Self {
-        Self { 
-            config, 
-            device: Arc::new(device) 
+        Self {
+            config,
+            device: Arc::new(device),
         }
     }
 
@@ -29,10 +29,13 @@ impl RigAgent {
 
         let mut client_builder = reqwest::Client::builder();
 
-        // Include OpenRouter metadata headers. 
+        // Include OpenRouter metadata headers.
         // These are harmless for other providers but required/recommended for OpenRouter.
         let mut headers = HeaderMap::new();
-        headers.insert("HTTP-Referer", HeaderValue::from_static("https://mobie.studio"));
+        headers.insert(
+            "HTTP-Referer",
+            HeaderValue::from_static("https://mobie.studio"),
+        );
         headers.insert("X-Title", HeaderValue::from_static("Mobie Studio"));
         client_builder = client_builder.default_headers(headers);
 
@@ -48,7 +51,7 @@ impl RigAgent {
 
     pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
-        
+
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
             .tool(Tap { device: self.device.clone() })
@@ -61,25 +64,22 @@ impl RigAgent {
         // Use max_turns to allow the agent to iterate
         match agent.prompt(goal).max_turns(20).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                Err(anyhow::anyhow!("Rig agent think failed: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("Rig agent think failed: {}", e)),
         }
     }
 
     // Keep the simple prompt for testing or simple queries
     pub async fn prompt(&self, goal: &str) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
-        
-        let agent = client.agent(&self.config.model)
+
+        let agent = client
+            .agent(&self.config.model)
             .preamble("You are a mobile testing agent. Respond with JSON actions.")
             .build();
 
         match agent.prompt(goal).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                Err(anyhow::anyhow!("Rig agent prompt failed: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("Rig agent prompt failed: {}", e)),
         }
     }
 }

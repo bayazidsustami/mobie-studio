@@ -29,7 +29,13 @@ pub struct TestCase {
 /// Slugify a string for use as a filename component.
 fn slugify(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
@@ -42,8 +48,7 @@ fn slugify(s: &str) -> String {
 pub fn export(tc: &TestCase) -> Result<PathBuf> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let results_dir = home.join("mobie-results");
-    std::fs::create_dir_all(&results_dir)
-        .context("Failed to create ~/mobie-results directory")?;
+    std::fs::create_dir_all(&results_dir).context("Failed to create ~/mobie-results directory")?;
 
     // Timestamp: YYYY-MM-DDTHH-MM-SS (safe for filenames)
     let now = std::time::SystemTime::now()
@@ -56,8 +61,7 @@ pub fn export(tc: &TestCase) -> Result<PathBuf> {
     let path = results_dir.join(&filename);
 
     let yaml = serde_yaml::to_string(tc).context("Failed to serialize TestCase to YAML")?;
-    std::fs::write(&path, yaml)
-        .with_context(|| format!("Failed to write YAML to {:?}", path))?;
+    std::fs::write(&path, yaml).with_context(|| format!("Failed to write YAML to {:?}", path))?;
 
     info!("Exported test case to {:?}", path);
     Ok(path)

@@ -93,7 +93,7 @@ pub fn parse_ui_xml(raw_xml: &str) -> Vec<UiElement> {
     while let Some(node_start) = raw_xml[cursor..].find("<node ") {
         let absolute_start = cursor + node_start;
         let segment_start = absolute_start + 6; // skip "<node "
-        
+
         // Find the end of this node's opening tag
         let tag_end = match raw_xml[segment_start..].find('>') {
             Some(e) => segment_start + e,
@@ -101,7 +101,7 @@ pub fn parse_ui_xml(raw_xml: &str) -> Vec<UiElement> {
         };
 
         let segment = &raw_xml[segment_start..tag_end];
-        
+
         let class = extract_attr(segment, "class").unwrap_or_default();
         let text = extract_attr(segment, "text").unwrap_or_default();
         let resource_id = extract_attr(segment, "resource-id").unwrap_or_default();

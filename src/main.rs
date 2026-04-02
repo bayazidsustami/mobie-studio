@@ -2,9 +2,9 @@ use gpui::*;
 use mobie::agent::AgentEngine;
 use mobie::config::load_config;
 use mobie::ui::{
-    Backspace, CancelGoal, Copy, Cut, Delete, Enter, MoveEnd, MoveHome, MoveLeft, MoveRight, Paste,
-    SaveSettings, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight, SendMessage,
-    MobieWorkspace,
+    Backspace, CancelGoal, Copy, Cut, Delete, Enter, MobieWorkspace, MoveEnd, MoveHome, MoveLeft,
+    MoveRight, Paste, SaveSettings, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight,
+    SendMessage,
 };
 use tracing::info;
 

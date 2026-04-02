@@ -1,11 +1,11 @@
-use rig::tool::Tool;
+use crate::agent::action::SwipeDirection;
+use crate::device::DeviceBridge;
 use rig::completion::ToolDefinition;
+use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
-use thiserror::Error;
 use std::sync::Arc;
-use crate::device::DeviceBridge;
-use crate::agent::action::SwipeDirection;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("Tool error: {0}")]
@@ -50,9 +50,14 @@ impl Tool for Tap {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.device.tap(args.x, args.y).await
+        self.device
+            .tap(args.x, args.y)
+            .await
             .map_err(|e| ToolError(e.to_string()))?;
-        Ok(format!("Tap performed at ({}, {}) for: {}", args.x, args.y, args.reasoning))
+        Ok(format!(
+            "Tap performed at ({}, {}) for: {}",
+            args.x, args.y, args.reasoning
+        ))
     }
 }
 
@@ -80,7 +85,8 @@ impl Tool for Input {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Type text into the currently focused field on the mobile device.".to_string(),
+            description: "Type text into the currently focused field on the mobile device."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -93,9 +99,14 @@ impl Tool for Input {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.device.input_text(&args.text).await
+        self.device
+            .input_text(&args.text)
+            .await
             .map_err(|e| ToolError(e.to_string()))?;
-        Ok(format!("Input \"{}\" performed for: {}", args.text, args.reasoning))
+        Ok(format!(
+            "Input \"{}\" performed for: {}",
+            args.text, args.reasoning
+        ))
     }
 }
 
@@ -151,11 +162,10 @@ impl Tool for Swipe {
         };
 
         let (w, h) = self.device.get_screen_size().await.unwrap_or((1080, 2400));
-        let dist = args.distance.unwrap_or_else(|| match dir {
+        let dist = args.distance.unwrap_or(match dir {
             SwipeDirection::Up | SwipeDirection::Down => h / 3,
             SwipeDirection::Left | SwipeDirection::Right => w / 2,
         });
-
         let (x2, y2) = match dir {
             SwipeDirection::Up => (args.x, args.y.saturating_sub(dist)),
             SwipeDirection::Down => (args.x, (args.y + dist).min(h - 1)),
@@ -163,10 +173,15 @@ impl Tool for Swipe {
             SwipeDirection::Right => ((args.x + dist).min(w - 1), args.y),
         };
 
-        self.device.swipe(args.x, args.y, x2, y2, 300).await
+        self.device
+            .swipe(args.x, args.y, x2, y2, 300)
+            .await
             .map_err(|e| ToolError(e.to_string()))?;
 
-        Ok(format!("Swipe {} from ({}, {}) performed for: {}", args.direction, args.x, args.y, args.reasoning))
+        Ok(format!(
+            "Swipe {} from ({}, {}) performed for: {}",
+            args.direction, args.x, args.y, args.reasoning
+        ))
     }
 }
 
@@ -194,7 +209,8 @@ impl Tool for KeyEvent {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send a key event (e.g., Back=4, Home=3, Enter=66) to the mobile device.".to_string(),
+            description: "Send a key event (e.g., Back=4, Home=3, Enter=66) to the mobile device."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -207,9 +223,14 @@ impl Tool for KeyEvent {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.device.keyevent(args.code).await
+        self.device
+            .keyevent(args.code)
+            .await
             .map_err(|e| ToolError(e.to_string()))?;
-        Ok(format!("KeyEvent {} performed for: {}", args.code, args.reasoning))
+        Ok(format!(
+            "KeyEvent {} performed for: {}",
+            args.code, args.reasoning
+        ))
     }
 }
 
@@ -248,10 +269,16 @@ impl Tool for Observe {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let xml = self.device.observe_ui().await
+        let xml = self
+            .device
+            .observe_ui()
+            .await
             .map_err(|e| ToolError(e.to_string()))?;
         let compressed = crate::device::compress_xml(&xml);
-        Ok(format!("Current UI State (reasoning: {}):\n{}", args.reasoning, compressed))
+        Ok(format!(
+            "Current UI State (reasoning: {}):\n{}",
+            args.reasoning, compressed
+        ))
     }
 }
 

@@ -55,10 +55,7 @@ pub enum Action {
     },
 
     /// The agent considers the goal achieved (or failed).
-    Done {
-        success: bool,
-        reason: String,
-    },
+    Done { success: bool, reason: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,10 +100,14 @@ impl Action {
 impl std::fmt::Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Action::Tap { x, y, reasoning, .. } => {
+            Action::Tap {
+                x, y, reasoning, ..
+            } => {
                 write!(f, "Tap({}, {}) — {}", x, y, reasoning)
             }
-            Action::Input { text, reasoning, .. } => {
+            Action::Input {
+                text, reasoning, ..
+            } => {
                 write!(f, "Input(\"{}\") — {}", text, reasoning)
             }
             Action::Swipe {
@@ -118,20 +119,22 @@ impl std::fmt::Display for Action {
                 ..
             } => {
                 if let Some(d) = distance {
-                    write!(f, "Swipe({:?}, dist={}, from {},{}) — {}", direction, d, x, y, reasoning)
+                    write!(
+                        f,
+                        "Swipe({:?}, dist={}, from {},{}) — {}",
+                        direction, d, x, y, reasoning
+                    )
                 } else {
                     write!(f, "Swipe({:?} from {},{}) — {}", direction, x, y, reasoning)
                 }
             }
-            Action::KeyEvent { code, reasoning, .. } => {
+            Action::KeyEvent {
+                code, reasoning, ..
+            } => {
                 write!(f, "KeyEvent({}) — {}", code, reasoning)
             }
             Action::Done { success, reason } => {
-                write!(
-                    f,
-                    "Done(success={}) — {}",
-                    success, reason
-                )
+                write!(f, "Done(success={}) — {}", success, reason)
             }
         }
     }
@@ -166,7 +169,9 @@ mod tests {
         let json = r#"{"action": "input", "text": "hello world", "reasoning": "Typing search"}"#;
         let action: Action = serde_json::from_str(json).unwrap();
         match action {
-            Action::Input { text, reasoning, .. } => {
+            Action::Input {
+                text, reasoning, ..
+            } => {
                 assert_eq!(text, "hello world");
                 assert_eq!(reasoning, "Typing search");
             }
@@ -179,7 +184,9 @@ mod tests {
         let json = r#"{"action": "swipe", "direction": "up", "x": 540, "y": 1200}"#;
         let action: Action = serde_json::from_str(json).unwrap();
         match action {
-            Action::Swipe { direction, x, y, .. } => {
+            Action::Swipe {
+                direction, x, y, ..
+            } => {
                 assert!(matches!(direction, SwipeDirection::Up));
                 assert_eq!(x, 540);
                 assert_eq!(y, 1200);
@@ -193,7 +200,9 @@ mod tests {
         let json = r#"{"action": "key_event", "code": 4, "reasoning": "Press back"}"#;
         let action: Action = serde_json::from_str(json).unwrap();
         match action {
-            Action::KeyEvent { code, reasoning, .. } => {
+            Action::KeyEvent {
+                code, reasoning, ..
+            } => {
                 assert_eq!(code, 4);
                 assert_eq!(reasoning, "Press back");
             }
