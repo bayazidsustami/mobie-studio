@@ -1,5 +1,4 @@
 use mobie::ui::TextInput;
-use gpui::TestAppContext;
 
 // Since we can't use gpui::test easily, we will use a regular test if we can mock the context.
 // Actually, let's try to use a dummy context if possible or just test the state.

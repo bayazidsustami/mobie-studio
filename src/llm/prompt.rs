@@ -1,4 +1,4 @@
-use crate::agent::Action;
+use crate::agent::action::Action;
 use crate::device::xml_parser::compress_xml;
 
 pub const SYSTEM_PROMPT: &str = r#"You are a mobile QA agent that controls an Android device to achieve user goals.
@@ -100,12 +100,13 @@ mod tests {
             sub_goal: "Start".to_string(),
         }];
         let message = format_user_message(goal, Some("Find button"), &history, xml);
-        
+
         assert!(message.contains("GOAL: Open settings"));
         assert!(message.contains("ACTIVE SUB-GOAL: Find button"));
         assert!(message.contains("RECENT HISTORY:"));
         assert!(message.contains("1. Tap(50, 50) — init"));
         assert!(message.contains("CURRENT SCREEN:"));
-        assert!(message.contains("[0] Button \"Settings\" center=[50,50] bounds=[0,0][100,100] clickable"));
+        assert!(message
+            .contains("[0] Button \"Settings\" center=[50,50] bounds=[0,0][100,100] clickable"));
     }
 }

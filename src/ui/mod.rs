@@ -1,40 +1,44 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use tokio::sync::mpsc;
-use std::ops::Range;
 use smallvec::SmallVec;
+use std::ops::Range;
+use tokio::sync::mpsc;
 
 use crate::agent::{AgentMessage, AgentStatus, AgentUpdate};
 use crate::config::{save_config, AppConfig};
+use crate::device::DeviceStatus;
 use crate::llm::LlmConfig;
 
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
-actions!(mobie, [
-    SendMessage, 
-    CancelGoal, 
-    NavigateSettings, 
-    NavigateChat, 
-    RefreshDevices, 
-    SaveSettings,
-    Backspace,
-    Delete,
-    SelectAll,
-    Enter,
-    Copy,
-    Cut,
-    Paste,
-    MoveLeft,
-    MoveRight,
-    MoveHome,
-    MoveEnd,
-    SelectLeft,
-    SelectRight,
-    SelectHome,
-    SelectEnd
-]);
+actions!(
+    mobie,
+    [
+        SendMessage,
+        CancelGoal,
+        NavigateSettings,
+        NavigateChat,
+        RefreshDevices,
+        SaveSettings,
+        Backspace,
+        Delete,
+        SelectAll,
+        Enter,
+        Copy,
+        Cut,
+        Paste,
+        MoveLeft,
+        MoveRight,
+        MoveHome,
+        MoveEnd,
+        SelectLeft,
+        SelectRight,
+        SelectHome,
+        SelectEnd
+    ]
+);
 
 // ---------------------------------------------------------------------------
 // Chat Message model
@@ -62,16 +66,18 @@ use std::cell::RefCell;
 pub struct TextInput {
     focus_handle: FocusHandle,
     text: String,
-    cursor_offset: usize, // Character offset
+    cursor_offset: usize,            // Character offset
     selection_anchor: Option<usize>, // Character offset
     scroll_offset_y: Pixels,
     placeholder: String,
     is_masked: bool,
-    
+
     // Caching for performance - using RefCell to allow updating from read() context
-    last_wrapped_lines: RefCell<Option<(String, Pixels, SmallVec<[WrappedLine; 1]>)>>,
+    last_wrapped_lines: RefCell<Option<WrappedLinesCache>>,
     last_layout_width: RefCell<Option<Pixels>>,
 }
+
+type WrappedLinesCache = (String, Pixels, SmallVec<[WrappedLine; 1]>);
 
 impl TextInput {
     pub fn new(cx: &mut Context<Self>, placeholder: String, initial_value: String) -> Self {
@@ -102,7 +108,7 @@ impl TextInput {
         let anchor = self.selection_anchor?;
         let start = anchor.min(self.cursor_offset);
         let end = anchor.max(self.cursor_offset);
-        
+
         if start != end {
             return Some(start..end);
         }
@@ -110,11 +116,18 @@ impl TextInput {
     }
 
     fn byte_offset_for_char_offset(&self, char_offset: usize) -> usize {
-        self.text.char_indices().map(|(i, _)| i).nth(char_offset).unwrap_or(self.text.len())
+        self.text
+            .char_indices()
+            .map(|(i, _)| i)
+            .nth(char_offset)
+            .unwrap_or(self.text.len())
     }
 
     fn char_offset_for_byte_offset(&self, byte_offset: usize) -> usize {
-        self.text.char_indices().take_while(|(i, _)| *i < byte_offset).count()
+        self.text
+            .char_indices()
+            .take_while(|(i, _)| *i < byte_offset)
+            .count()
     }
 
     fn invalidate_cache(&self) {
@@ -228,7 +241,9 @@ impl TextInput {
         if let Some(range) = self.selection_range() {
             let start_byte = self.byte_offset_for_char_offset(range.start);
             let end_byte = self.byte_offset_for_char_offset(range.end);
-            cx.write_to_clipboard(ClipboardItem::new_string(self.text[start_byte..end_byte].to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.text[start_byte..end_byte].to_string(),
+            ));
         }
     }
 
@@ -236,7 +251,9 @@ impl TextInput {
         if let Some(range) = self.selection_range() {
             let start_byte = self.byte_offset_for_char_offset(range.start);
             let end_byte = self.byte_offset_for_char_offset(range.end);
-            cx.write_to_clipboard(ClipboardItem::new_string(self.text[start_byte..end_byte].to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.text[start_byte..end_byte].to_string(),
+            ));
             self.text.replace_range(start_byte..end_byte, "");
             self.cursor_offset = range.start;
             self.selection_anchor = None;
@@ -284,20 +301,23 @@ impl TextInput {
         };
 
         let font_size = px(14.0);
-        let wrapped_lines = window.text_system().shape_text(
-            display_text.clone().into(),
-            font_size,
-            &[TextRun {
-                len: display_text.len(),
-                color: text_color.into(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-                font: window.text_style().font(),
-            }],
-            Some(width),
-            None
-        ).unwrap_or_default();
+        let wrapped_lines = window
+            .text_system()
+            .shape_text(
+                display_text.clone().into(),
+                font_size,
+                &[TextRun {
+                    len: display_text.len(),
+                    color: text_color.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                    font: window.text_style().font(),
+                }],
+                Some(width),
+                None,
+            )
+            .unwrap_or_default();
 
         *self.last_wrapped_lines.borrow_mut() = Some((display_text, width, wrapped_lines.clone()));
         wrapped_lines
@@ -307,7 +327,7 @@ impl TextInput {
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle.clone();
-        
+
         div()
             .id("text-input")
             .flex()
@@ -365,10 +385,12 @@ impl Element for TextInputElement {
         let height = {
             let this = self.view.read(app);
             // Ensure we have a sane width for the first layout pass
-            let available_width = this.last_layout_width.borrow()
+            let available_width = this
+                .last_layout_width
+                .borrow()
                 .filter(|w| *w > px(1.0))
                 .unwrap_or_else(|| window.viewport_size().width - px(320.0));
-            
+
             let lines = this.shape_text(window, available_width);
             let num_lines = lines.len().max(1);
             // Limit to 3 lines height
@@ -394,7 +416,6 @@ impl Element for TextInputElement {
         _window: &mut Window,
         _app: &mut App,
     ) -> Self::PrepaintState {
-        ()
     }
 
     fn paint(
@@ -407,7 +428,15 @@ impl Element for TextInputElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (is_focused, cursor_offset, selection_range, focus_handle, is_masked, text_len, mut scroll_offset_y) = {
+        let (
+            is_focused,
+            cursor_offset,
+            selection_range,
+            focus_handle,
+            is_masked,
+            text_len,
+            mut scroll_offset_y,
+        ) = {
             let state = self.view.read(cx);
             (
                 state.focus_handle.is_focused(window),
@@ -439,7 +468,9 @@ impl Element for TextInputElement {
             for line in &wrapped_lines {
                 let end_byte = start_byte + line.len();
                 if target_byte_offset >= start_byte && target_byte_offset <= end_byte {
-                    let pos = line.position_for_index(target_byte_offset - start_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                    let pos = line
+                        .position_for_index(target_byte_offset - start_byte, line_height)
+                        .unwrap_or(point(px(0.0), px(0.0)));
                     y += pos.y;
                     break;
                 }
@@ -457,8 +488,12 @@ impl Element for TextInputElement {
         }
 
         // Clamp scroll offset
-        let total_height = wrapped_lines.iter().fold(px(0.0), |acc, l| acc + l.size(line_height).height);
-        scroll_offset_y = scroll_offset_y.max(px(0.0)).min((total_height - bounds.size.height).max(px(0.0)));
+        let total_height = wrapped_lines
+            .iter()
+            .fold(px(0.0), |acc, l| acc + l.size(line_height).height);
+        scroll_offset_y = scroll_offset_y
+            .max(px(0.0))
+            .min((total_height - bounds.size.height).max(px(0.0)));
 
         // Update the view's scroll offset if it changed
         self.view.update(cx, |this, _| {
@@ -484,7 +519,6 @@ impl Element for TextInputElement {
         window.on_mouse_event({
             let view = self.view.clone();
             let focus_handle = focus_handle.clone();
-            let bounds = bounds;
             let wrapped_lines = wrapped_lines.clone();
             let state_text_ref = state_text_ref.clone();
             let placeholder = placeholder.clone();
@@ -492,8 +526,9 @@ impl Element for TextInputElement {
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                     window.focus(&focus_handle);
-                    let local_point = event.position - bounds.origin + point(px(0.0), scroll_offset_y);
-                    
+                    let local_point =
+                        event.position - bounds.origin + point(px(0.0), scroll_offset_y);
+
                     let mut new_offset_chars = 0;
                     let mut current_y = px(0.0);
                     let mut current_line_start_byte = 0;
@@ -507,16 +542,23 @@ impl Element for TextInputElement {
                     for line in &wrapped_lines {
                         let line_size = line.size(line_height);
                         let line_len_bytes = line.len();
-                        if local_point.y >= current_y && local_point.y < current_y + line_size.height {
+                        if local_point.y >= current_y
+                            && local_point.y < current_y + line_size.height
+                        {
                             let local_line_point = point(local_point.x, local_point.y - current_y);
-                            if let Ok(index_bytes) = line.index_for_position(local_line_point, line_height) {
-                                let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
-                                let char_offset_in_line = line_text[..index_bytes.min(line_len_bytes)].chars().count();
+                            if let Ok(index_bytes) =
+                                line.index_for_position(local_line_point, line_height)
+                            {
+                                let line_text = &state_text_ref[current_line_start_byte
+                                    ..current_line_start_byte + line_len_bytes];
+                                let char_offset_in_line =
+                                    line_text[..index_bytes.min(line_len_bytes)].chars().count();
                                 new_offset_chars += char_offset_in_line;
                                 break;
                             }
                         }
-                        let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
+                        let line_text = &state_text_ref
+                            [current_line_start_byte..current_line_start_byte + line_len_bytes];
                         new_offset_chars += line_text.chars().count();
                         current_y += line_size.height;
                         current_line_start_byte += line_len_bytes;
@@ -545,13 +587,16 @@ impl Element for TextInputElement {
         window.on_mouse_event({
             let view = self.view.clone();
             let wrapped_lines = wrapped_lines.clone();
-            let bounds = bounds;
             let state_text_ref = state_text_ref.clone();
             let placeholder = placeholder.clone();
             let scroll_offset_y = scroll_offset_y;
             move |event: &MouseMoveEvent, phase, _window, cx| {
-                if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) && bounds.contains(&event.position) {
-                    let local_point = event.position - bounds.origin + point(px(0.0), scroll_offset_y);
+                if phase == DispatchPhase::Bubble
+                    && event.pressed_button == Some(MouseButton::Left)
+                    && bounds.contains(&event.position)
+                {
+                    let local_point =
+                        event.position - bounds.origin + point(px(0.0), scroll_offset_y);
                     let mut new_offset_chars = 0;
                     let mut current_y = px(0.0);
                     let mut current_line_start_byte = 0;
@@ -565,16 +610,23 @@ impl Element for TextInputElement {
                     for line in &wrapped_lines {
                         let line_size = line.size(line_height);
                         let line_len_bytes = line.len();
-                        if local_point.y >= current_y && local_point.y < current_y + line_size.height {
+                        if local_point.y >= current_y
+                            && local_point.y < current_y + line_size.height
+                        {
                             let local_line_point = point(local_point.x, local_point.y - current_y);
-                            if let Ok(index_bytes) = line.index_for_position(local_line_point, line_height) {
-                                let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
-                                let char_offset_in_line = line_text[..index_bytes.min(line_len_bytes)].chars().count();
+                            if let Ok(index_bytes) =
+                                line.index_for_position(local_line_point, line_height)
+                            {
+                                let line_text = &state_text_ref[current_line_start_byte
+                                    ..current_line_start_byte + line_len_bytes];
+                                let char_offset_in_line =
+                                    line_text[..index_bytes.min(line_len_bytes)].chars().count();
                                 new_offset_chars += char_offset_in_line;
                                 break;
                             }
                         }
-                        let line_text = &state_text_ref[current_line_start_byte..current_line_start_byte + line_len_bytes];
+                        let line_text = &state_text_ref
+                            [current_line_start_byte..current_line_start_byte + line_len_bytes];
                         new_offset_chars += line_text.chars().count();
                         current_y += line_size.height;
                         current_line_start_byte += line_len_bytes;
@@ -601,8 +653,9 @@ impl Element for TextInputElement {
                 if let Some(ref char_range) = selection_range {
                     // Convert character range to byte range for the painting loop
                     let this = self.view.read(cx);
-                    let range = this.byte_offset_for_char_offset(char_range.start)..this.byte_offset_for_char_offset(char_range.end);
-                    
+                    let range = this.byte_offset_for_char_offset(char_range.start)
+                        ..this.byte_offset_for_char_offset(char_range.end);
+
                     let mut current_y = bounds.origin.y - scroll_offset_y;
                     let mut line_start_byte_offset = 0;
 
@@ -612,15 +665,31 @@ impl Element for TextInputElement {
                         let line_size = line.size(line_height);
 
                         // Calculate intersection in byte space
-                        let sel_start_byte = range.start.max(line_start_byte_offset).min(line_end_byte_offset);
-                        let sel_end_byte = range.end.max(line_start_byte_offset).min(line_end_byte_offset);
+                        let sel_start_byte = range
+                            .start
+                            .max(line_start_byte_offset)
+                            .min(line_end_byte_offset);
+                        let sel_start_byte = sel_start_byte.min(
+                            range
+                                .end
+                                .max(line_start_byte_offset)
+                                .min(line_end_byte_offset),
+                        );
+                        let sel_end_byte = range
+                            .end
+                            .max(line_start_byte_offset)
+                            .min(line_end_byte_offset);
 
                         if sel_start_byte < sel_end_byte {
                             let relative_start_byte = sel_start_byte - line_start_byte_offset;
                             let relative_end_byte = sel_end_byte - line_start_byte_offset;
 
-                            let start_pos = line.position_for_index(relative_start_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
-                            let end_pos = line.position_for_index(relative_end_byte, line_height).unwrap_or(point(line_size.width, px(0.0)));
+                            let start_pos = line
+                                .position_for_index(relative_start_byte, line_height)
+                                .unwrap_or(point(px(0.0), px(0.0)));
+                            let end_pos = line
+                                .position_for_index(relative_end_byte, line_height)
+                                .unwrap_or(point(line_size.width, px(0.0)));
 
                             let start_row = (start_pos.y / line_height).round() as i32;
                             let end_row = (end_pos.y / line_height).round() as i32;
@@ -642,7 +711,10 @@ impl Element for TextInputElement {
                                 if row_start_x < row_end_x {
                                     window.paint_quad(fill(
                                         Bounds {
-                                            origin: point(bounds.origin.x + row_start_x, current_y + row_y),
+                                            origin: point(
+                                                bounds.origin.x + row_start_x,
+                                                current_y + row_y,
+                                            ),
                                             size: size(row_end_x - row_start_x, line_height),
                                         },
                                         rgba(0x4488cc88),
@@ -660,7 +732,14 @@ impl Element for TextInputElement {
             let mut current_origin = bounds.origin - point(px(0.0), scroll_offset_y);
             for line in &wrapped_lines {
                 let line_size = line.size(line_height);
-                let _ = line.paint(current_origin, line_height, TextAlign::Left, None, window, cx);
+                let _ = line.paint(
+                    current_origin,
+                    line_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
                 current_origin.y += line_size.height;
             }
 
@@ -673,15 +752,22 @@ impl Element for TextInputElement {
                 if state_text.is_empty() {
                     cursor_pos = Some(bounds.origin);
                 } else {
-                    let target_byte_offset = self.view.read(cx).byte_offset_for_char_offset(cursor_offset);
+                    let target_byte_offset = self
+                        .view
+                        .read(cx)
+                        .byte_offset_for_char_offset(cursor_offset);
                     for line in &wrapped_lines {
                         let line_len_bytes = line.len();
                         let line_end_byte_offset = line_start_byte_offset + line_len_bytes;
                         let line_size = line.size(line_height);
 
-                        if target_byte_offset >= line_start_byte_offset && target_byte_offset <= line_end_byte_offset {
+                        if target_byte_offset >= line_start_byte_offset
+                            && target_byte_offset <= line_end_byte_offset
+                        {
                             let relative_byte = target_byte_offset - line_start_byte_offset;
-                            let pos = line.position_for_index(relative_byte, line_height).unwrap_or(point(px(0.0), px(0.0)));
+                            let pos = line
+                                .position_for_index(relative_byte, line_height)
+                                .unwrap_or(point(px(0.0), px(0.0)));
                             cursor_pos = Some(point(bounds.origin.x + pos.x, current_y + pos.y));
                             break;
                         }
@@ -702,7 +788,11 @@ impl Element for TextInputElement {
             }
         });
 
-        window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.view.clone()), cx);
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(bounds, self.view.clone()),
+            cx,
+        );
     }
 
     fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
@@ -711,14 +801,25 @@ impl Element for TextInputElement {
 }
 
 impl EntityInputHandler for TextInput {
-    fn text_for_range(&mut self, range: Range<usize>, _adjusted_range: &mut Option<Range<usize>>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<String> {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        _adjusted_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
         let text_utf16: Vec<u16> = self.text.encode_utf16().collect();
         let start = range.start.min(text_utf16.len());
         let end = range.end.min(text_utf16.len());
         String::from_utf16(&text_utf16[start..end]).ok()
     }
 
-    fn selected_text_range(&mut self, _ignore_disabled_input: bool, _window: &mut Window, _cx: &mut Context<Self>) -> Option<UTF16Selection> {
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
         let range = if let Some(r) = self.selection_range() {
             self.byte_offset_for_char_offset(r.start)..self.byte_offset_for_char_offset(r.end)
         } else {
@@ -735,18 +836,32 @@ impl EntityInputHandler for TextInput {
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
         None
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
 
-    fn replace_text_in_range(&mut self, range: Option<Range<usize>>, text: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let char_range = range.map(|r| {
             let text_utf16: Vec<u16> = self.text.encode_utf16().collect();
-            let start_byte = String::from_utf16(&text_utf16[..r.start.min(text_utf16.len())]).map(|s| s.len()).unwrap_or(0);
-            let end_byte = String::from_utf16(&text_utf16[..r.end.min(text_utf16.len())]).map(|s| s.len()).unwrap_or(0);
-            
+            let start_byte = String::from_utf16(&text_utf16[..r.start.min(text_utf16.len())])
+                .map(|s| s.len())
+                .unwrap_or(0);
+            let end_byte = String::from_utf16(&text_utf16[..r.end.min(text_utf16.len())])
+                .map(|s| s.len())
+                .unwrap_or(0);
+
             let start_char = self.char_offset_for_byte_offset(start_byte);
             let end_char = self.char_offset_for_byte_offset(end_byte);
             start_char..end_char
@@ -776,15 +891,33 @@ impl EntityInputHandler for TextInput {
         cx.notify();
     }
 
-    fn replace_and_mark_text_in_range(&mut self, range: Option<Range<usize>>, new_text: &str, _new_selected_range: Option<Range<usize>>, window: &mut Window, cx: &mut Context<Self>) {
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        _new_selected_range: Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.replace_text_in_range(range, new_text, window, cx);
     }
 
-    fn bounds_for_range(&mut self, _range_utf16: Range<usize>, _element_bounds: Bounds<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        _element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
         None
     }
 
-    fn character_index_for_point(&mut self, _point: Point<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
         None
     }
 }
@@ -812,9 +945,9 @@ pub struct MobieWorkspace {
     agent_status: AgentStatus,
     cmd_tx: mpsc::Sender<AgentMessage>,
     current_view: AppView,
-    devices: Vec<String>,
+    devices: Vec<(String, DeviceStatus)>,
     selected_device: Option<String>,
-    
+
     // Inputs
     chat_input: Entity<TextInput>,
     settings_api_key: Entity<TextInput>,
@@ -851,14 +984,17 @@ impl MobieWorkspace {
                             AgentUpdate::DeviceList(devs) => {
                                 let count = devs.len();
                                 workspace.devices = devs;
-                                // Auto-select first device if none selected
+                                // Auto-select first online device if none selected
                                 if workspace.selected_device.is_none() {
-                                    workspace.selected_device =
-                                        workspace.devices.first().cloned();
+                                    workspace.selected_device = workspace
+                                        .devices
+                                        .iter()
+                                        .find(|(_, s)| *s == DeviceStatus::Online)
+                                        .map(|(id, _)| id.clone());
                                 }
                                 workspace.messages.push(ChatMessage {
                                     role: ChatRole::System,
-                                    content: format!("✅ Found {} device(s).", count),
+                                    content: format!("✅ Found {} device(s)/AVDs.", count),
                                 });
                                 workspace.chat_scroll_handle.scroll_to_bottom();
                             }
@@ -870,14 +1006,22 @@ impl MobieWorkspace {
         })
         .detach();
 
-        let chat_input = cx.new(|cx| TextInput::new(cx, "Type a goal for the agent...".into(), String::new()));
+        let chat_input =
+            cx.new(|cx| TextInput::new(cx, "Type a goal for the agent...".into(), String::new()));
         let settings_api_key = cx.new(|cx| {
             let mut input = TextInput::new(cx, "sk-...".into(), initial_config.llm.api_key.clone());
             input.set_masked(true);
             input
         });
-        let settings_model = cx.new(|cx| TextInput::new(cx, "gpt-4o".into(), initial_config.llm.model.clone()));
-        let settings_base_url = cx.new(|cx| TextInput::new(cx, "https://api.openai.com/v1".into(), initial_config.llm.base_url.clone()));
+        let settings_model =
+            cx.new(|cx| TextInput::new(cx, "gpt-4o".into(), initial_config.llm.model.clone()));
+        let settings_base_url = cx.new(|cx| {
+            TextInput::new(
+                cx,
+                "https://api.openai.com/v1".into(),
+                initial_config.llm.base_url.clone(),
+            )
+        });
 
         Self {
             focus_handle,
@@ -943,12 +1087,7 @@ impl MobieWorkspace {
         cx.notify();
     }
 
-    fn navigate_chat(
-        &mut self,
-        _: &NavigateChat,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn navigate_chat(&mut self, _: &NavigateChat, _window: &mut Window, cx: &mut Context<Self>) {
         self.current_view = AppView::Chat;
         cx.notify();
     }
@@ -973,21 +1112,17 @@ impl MobieWorkspace {
             role: ChatRole::System,
             content: "Refreshing device list...".to_string(),
         });
-        
+
         let tx = self.cmd_tx.clone();
         cx.spawn(async move |_, _| {
             let _ = tx.send(AgentMessage::RefreshDevices).await;
-        }).detach();
+        })
+        .detach();
 
         cx.notify();
     }
 
-    fn save_settings(
-        &mut self,
-        _: &SaveSettings,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn save_settings(&mut self, _: &SaveSettings, _window: &mut Window, cx: &mut Context<Self>) {
         let new_llm = LlmConfig {
             api_key: self.settings_api_key.read(cx).text().to_string(),
             model: self.settings_model.read(cx).text().to_string(),
@@ -1073,9 +1208,12 @@ impl MobieWorkspace {
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(0xffffff))
                         .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                            this.cancel_goal(&CancelGoal, window, cx);
-                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.cancel_goal(&CancelGoal, window, cx);
+                            }),
+                        )
                         .child("■ Cancel Goal"),
                 )
             })
@@ -1085,12 +1223,27 @@ impl MobieWorkspace {
         div()
             .flex()
             .gap(px(4.0))
-            .child(self.render_nav_tab("💬 Chat", self.current_view == AppView::Chat, cx, NavTabAction::Chat))
-            .child(self.render_nav_tab("⚙ Settings", self.current_view == AppView::Settings, cx, NavTabAction::Settings))
+            .child(self.render_nav_tab(
+                "💬 Chat",
+                self.current_view == AppView::Chat,
+                cx,
+                NavTabAction::Chat,
+            ))
+            .child(self.render_nav_tab(
+                "⚙ Settings",
+                self.current_view == AppView::Settings,
+                cx,
+                NavTabAction::Settings,
+            ))
     }
 
-
-    fn render_nav_tab(&self, label: &str, active: bool, cx: &mut Context<Self>, action: NavTabAction) -> Div {
+    fn render_nav_tab(
+        &self,
+        label: &str,
+        active: bool,
+        cx: &mut Context<Self>,
+        action: NavTabAction,
+    ) -> Div {
         let bg = if active { rgb(0xe94560) } else { rgb(0x2a2a4a) };
         let text = if active { rgb(0xffffff) } else { rgb(0x888899) };
         div()
@@ -1103,43 +1256,43 @@ impl MobieWorkspace {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(text)
             .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                match action {
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| match action {
                     NavTabAction::Chat => this.navigate_chat(&NavigateChat, window, cx),
                     NavTabAction::Settings => this.navigate_settings(&NavigateSettings, window, cx),
-                }
-            }))
+                }),
+            )
             .child(label.to_string())
     }
 
     fn render_device_section(&self, cx: &mut Context<Self>) -> Div {
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0x666688))
-                            .child("DEVICES"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x4488cc))
-                            .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+        let mut section = div().flex().flex_col().gap(px(6.0)).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0x666688))
+                        .child("DEVICES"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x4488cc))
+                        .cursor_pointer()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
                                 this.refresh_devices(&RefreshDevices, window, cx);
-                            }))
-                            .child("↺ Refresh"),
-                    ),
-            );
+                            }),
+                        )
+                        .child("↺ Refresh"),
+                ),
+        );
 
         if self.devices.is_empty() {
             section = section.child(
@@ -1148,7 +1301,11 @@ impl MobieWorkspace {
                     .items_center()
                     .gap(px(6.0))
                     .child(
-                        div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(rgb(0xff4444)),
+                        div()
+                            .w(px(8.0))
+                            .h(px(8.0))
+                            .rounded(px(4.0))
+                            .bg(rgb(0xff4444)),
                     )
                     .child(
                         div()
@@ -1158,36 +1315,111 @@ impl MobieWorkspace {
                     ),
             );
         } else {
-            for dev in &self.devices {
+            let cmd_tx = self.cmd_tx.clone();
+            for (dev, status) in &self.devices {
                 let is_selected = self.selected_device.as_deref() == Some(dev.as_str());
-                let dot_color = if is_selected { rgb(0x44ff88) } else { rgb(0x888888) };
-                let text_color = if is_selected { rgb(0xeeeeff) } else { rgb(0x888899) };
+                let dot_color = match status {
+                    DeviceStatus::Online => rgb(0x44ff88),
+                    DeviceStatus::Launching => rgb(0xffcc44),
+                    DeviceStatus::Offline => rgb(0x888888),
+                };
+                let text_color = if is_selected {
+                    rgb(0xeeeeff)
+                } else {
+                    rgb(0x888899)
+                };
+
                 let dev_id = dev.clone();
-                let tx = self.cmd_tx.clone();
+                let status_val = *status;
+                let tx = cmd_tx.clone();
+
                 section = section.child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.0))
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
-                            this.selected_device = Some(dev_id.clone());
-                            let tx2 = tx.clone();
-                            let id = dev_id.clone();
-                            cx.spawn(async move |_, _| {
-                                let _ = tx2.send(AgentMessage::SelectDevice(id)).await;
-                            }).detach();
-                            cx.notify();
-                        }))
-                        .child(
-                            div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot_color),
-                        )
+                        .justify_between()
+                        .p_1()
                         .child(
                             div()
-                                .text_sm()
-                                .text_color(text_color)
-                                .child(dev.clone()),
-                        ),
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener({
+                                        let dev_id = dev_id.clone();
+                                        let tx = tx.clone();
+                                        move |this, _, _window, cx| {
+                                            if status_val == DeviceStatus::Online {
+                                                this.selected_device = Some(dev_id.clone());
+                                                let tx2 = tx.clone();
+                                                let id = dev_id.clone();
+                                                cx.spawn(async move |_, _| {
+                                                    let _ = tx2
+                                                        .send(AgentMessage::SelectDevice(id))
+                                                        .await;
+                                                })
+                                                .detach();
+                                                cx.notify();
+                                            }
+                                        }
+                                    }),
+                                )
+                                .child(div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(dot_color))
+                                .child(div().text_sm().text_color(text_color).child(dev.clone())),
+                        )
+                        .child(div().flex().gap(px(4.0)).child(match status {
+                            DeviceStatus::Offline => {
+                                let name = dev.clone();
+                                let tx = tx.clone();
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x44ff88))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, _, cx| {
+                                            let tx2 = tx.clone();
+                                            let n = name.clone();
+                                            cx.background_executor()
+                                                .spawn(async move {
+                                                    let _ = tx2
+                                                        .send(AgentMessage::LaunchEmulator(n))
+                                                        .await;
+                                                })
+                                                .detach();
+                                        }),
+                                    )
+                                    .child("▶ Start")
+                            }
+                            DeviceStatus::Online => {
+                                let id = dev.clone();
+                                let tx = tx.clone();
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xff4444))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, _, cx| {
+                                            let tx2 = tx.clone();
+                                            let i = id.clone();
+                                            cx.background_executor()
+                                                .spawn(async move {
+                                                    let _ = tx2
+                                                        .send(AgentMessage::StopEmulator(i))
+                                                        .await;
+                                                })
+                                                .detach();
+                                        }),
+                                    )
+                                    .child("■ Stop")
+                            }
+                            DeviceStatus::Launching => {
+                                div().text_xs().text_color(rgb(0x888888)).child("...")
+                            }
+                        })),
                 );
             }
         }
@@ -1284,7 +1516,7 @@ impl MobieWorkspace {
                                         .child(msg.content.clone()),
                                 ),
                         )
-                    }))
+                    })),
             )
     }
 
@@ -1305,14 +1537,10 @@ impl MobieWorkspace {
                     .flex()
                     .flex_col()
                     .child(self.chat_input.clone())
-                    .when(is_idle && !self.chat_input.read(cx).text().is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(0x666688))
-                                .child("↵ Enter"),
-                        )
-                    }),
+                    .when(
+                        is_idle && !self.chat_input.read(cx).text().is_empty(),
+                        |d| d.child(div().text_xs().text_color(rgb(0x666688)).child("↵ Enter")),
+                    ),
             )
     }
 
@@ -1396,9 +1624,12 @@ impl MobieWorkspace {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(0xffffff))
                             .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                this.save_settings(&SaveSettings, window, cx);
-                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.save_settings(&SaveSettings, window, cx);
+                                }),
+                            )
                             .child("✓ Save & Apply"),
                     )
                     .child(
@@ -1411,15 +1642,24 @@ impl MobieWorkspace {
                             .text_sm()
                             .text_color(rgb(0x888899))
                             .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                this.navigate_chat(&NavigateChat, window, cx);
-                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.navigate_chat(&NavigateChat, window, cx);
+                                }),
+                            )
                             .child("Cancel"),
                     ),
             )
     }
 
-    fn render_settings_field(&self, label: &str, input: Entity<TextInput>, _window: &Window, _cx: &mut Context<Self>) -> Div {
+    fn render_settings_field(
+        &self,
+        label: &str,
+        input: Entity<TextInput>,
+        _window: &Window,
+        _cx: &mut Context<Self>,
+    ) -> Div {
         div()
             .flex()
             .flex_col()
@@ -1438,7 +1678,7 @@ impl MobieWorkspace {
                     .p(px(12.0))
                     .border_1()
                     .border_color(rgb(0x2a2a4a))
-                    .child(input)
+                    .child(input),
             )
     }
 }
@@ -1491,9 +1731,12 @@ impl Render for MobieWorkspace {
                                     .text_xs()
                                     .text_color(rgb(0x4488cc))
                                     .cursor_pointer()
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                        this.navigate_settings(&NavigateSettings, window, cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.navigate_settings(&NavigateSettings, window, cx);
+                                        }),
+                                    )
                                     .child("⚙ Settings"),
                             ),
                     )
