@@ -12,5 +12,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [~] **Track: UI Layout Polish & UX Refinement**
+- [x] **Track: UI Layout Polish & UX Refinement**
 *Link: [./tracks/ui-polish_20260402/](./tracks/ui-polish_20260402/)*
