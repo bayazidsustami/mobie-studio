@@ -4,10 +4,10 @@
 - [x] Task: Extend `DeviceBridge` to support listing AVDs using `emulator -list-avds`. [9adc075]
     - [x] Write Tests for AVD listing (mocking command output)
     - [x] Implement `list_avds` in `src/device/mod.rs`
-- [~] Task: Implement `launch_emulator` and `stop_emulator` methods in `DeviceBridge`.
-    - [ ] Write Tests for launch/stop commands
-    - [ ] Implement `launch_emulator` (using `emulator -avd`) and `stop_emulator` (using `adb emu kill`) in `src/device/mod.rs`
-- [ ] Task: Implement status detection logic for emulators (Offline, Launching, Online).
+- [x] Task: Implement `launch_emulator` and `stop_emulator` methods in `DeviceBridge`. [a53af54]
+    - [x] Write Tests for launch/stop commands
+    - [x] Implement `launch_emulator` (using `emulator -avd`) and `stop_emulator` (using `adb emu kill`) in `src/device/mod.rs`
+- [~] Task: Implement status detection logic for emulators (Offline, Launching, Online).
     - [ ] Write Tests for status transition logic
     - [ ] Implement `get_device_status` helper in `src/device/mod.rs`
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Device Bridge Enhancement' (Protocol in workflow.md)
