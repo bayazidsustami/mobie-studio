@@ -69,3 +69,45 @@ async fn test_stop_emulator_mocked() {
     bridge.select_device("emulator-5554".to_string());
     bridge.stop_emulator().await.expect("Failed to stop emulator");
 }
+
+#[tokio::test]
+async fn test_get_avd_status_mocked() {
+    use mobie::device::DeviceStatus;
+    
+    // Scenario: 
+    // - adb devices: emulator-5554
+    // - adb -s emulator-5554 emu avd name: Pixel_7_Pro_API_33
+    // - adb -s emulator-5554 shell getprop sys.boot_completed: 1
+    
+    #[derive(Debug)]
+    struct StatusMockRunner;
+    impl CommandRunner for StatusMockRunner {
+        fn run(&self, cmd: &str, args: &[String]) -> Result<std::process::Output> {
+            let stdout = match (cmd, args.get(0).map(|s| s.as_str()), args.get(1).map(|s| s.as_str())) {
+                ("adb", Some("devices"), _) => "List of devices attached\nemulator-5554\tdevice\n",
+                ("adb", Some("-s"), Some("emulator-5554")) => {
+                    if args.contains(&"emu".to_string()) {
+                        "Pixel_7_Pro_API_33\nOK\n"
+                    } else if args.contains(&"shell".to_string()) {
+                        "1\n"
+                    } else {
+                        ""
+                    }
+                },
+                _ => "",
+            };
+            Ok(std::process::Output {
+                status: unsafe { std::mem::zeroed() },
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+        fn spawn(&self, _cmd: &str, _args: &[String]) -> Result<()> { Ok(()) }
+    }
+    
+    let bridge = DeviceBridge::with_runner(Arc::new(StatusMockRunner));
+    // Should be Online
+    assert_eq!(bridge.get_avd_status("Pixel_7_Pro_API_33").await.unwrap(), DeviceStatus::Online);
+    // Should be Offline
+    assert_eq!(bridge.get_avd_status("Unknown_AVD").await.unwrap(), DeviceStatus::Offline);
+}

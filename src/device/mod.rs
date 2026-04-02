@@ -35,6 +35,13 @@ impl CommandRunner for RealCommandRunner {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeviceStatus {
+    Offline,
+    Launching,
+    Online,
+}
+
 #[derive(Clone, Debug)]
 pub struct DeviceBridge {
     device_id: Option<String>,
@@ -356,5 +363,48 @@ impl DeviceBridge {
             return Err(anyhow::anyhow!("Stop emulator failed: {}", stderr));
         }
         Ok(())
+    }
+
+    /// Gets the current status of an AVD.
+    pub async fn get_avd_status(&self, avd_name: &str) -> Result<DeviceStatus> {
+        let devices = self.list_devices().await?;
+        
+        for id in devices {
+            // Only emulators have an AVD name we can query this way
+            if id.starts_with("emulator-") {
+                let name_output = self
+                    .run_command_timeout(
+                        "adb".to_string(),
+                        vec!["-s".to_string(), id.clone(), "emu".to_string(), "avd".to_string(), "name".to_string()],
+                        std::time::Duration::from_secs(2),
+                    )
+                    .await;
+
+                if let Ok(out) = name_output {
+                    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    // Some versions of 'emu avd name' return multiple lines or "OK" at the end.
+                    if name.contains(avd_name) {
+                        // Check if booted
+                        let boot_output = self
+                            .run_command_timeout(
+                                "adb".to_string(),
+                                vec!["-s".to_string(), id, "shell".to_string(), "getprop".to_string(), "sys.boot_completed".to_string()],
+                                std::time::Duration::from_secs(2),
+                            )
+                            .await;
+                        
+                        if let Ok(out) = boot_output {
+                            if String::from_utf8_lossy(&out.stdout).trim() == "1" {
+                                return Ok(DeviceStatus::Online);
+                            } else {
+                                return Ok(DeviceStatus::Launching);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(DeviceStatus::Offline)
     }
 }
