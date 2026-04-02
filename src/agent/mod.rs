@@ -1,31 +1,28 @@
+use tokio::sync::mpsc;
+use tracing::{error, info};
+
+use crate::device::{DeviceBridge, DeviceStatus};
+use crate::llm::LlmConfig;
+
 pub mod action;
 pub mod rig_agent;
 pub mod tools;
 
-pub use action::Action;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
-
-use crate::config::AppConfig;
-use crate::device::DeviceBridge;
-use crate::llm::LlmConfig;
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
+/// High-level status for the UI.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentStatus {
     Idle,
-    Observing,
     Thinking,
     Acting,
     Error(String),
 }
 
 /// Messages the UI sends **to** the Agent Engine.
+#[derive(Debug, Clone)]
 pub enum AgentMessage {
+    /// Start a new goal (exploratory run).
     StartGoal(String),
+    /// Cancel the current goal.
     Stop,
     /// Update LLM configuration (API key, model, etc.) at runtime.
     UpdateConfig(LlmConfig),
@@ -33,6 +30,10 @@ pub enum AgentMessage {
     SelectDevice(String),
     /// Refresh the list of connected devices.
     RefreshDevices,
+    /// Launch an emulator by AVD name.
+    LaunchEmulator(String),
+    /// Stop an emulator by ID.
+    StopEmulator(String),
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -40,8 +41,8 @@ pub enum AgentMessage {
 pub enum AgentUpdate {
     StatusChanged(AgentStatus),
     AgentReply(String),
-    /// Refreshed list of connected ADB device IDs.
-    DeviceList(Vec<String>),
+    /// Refreshed list of devices with their status.
+    DeviceList(Vec<(String, DeviceStatus)>),
 }
 
 // ---------------------------------------------------------------------------
@@ -53,84 +54,122 @@ pub struct AgentEngine {
 }
 
 impl AgentEngine {
-    /// Spawn the agent loop on the GPUI background executor.
+    /// Starts the agent communication channel.
     pub fn start(
         _update_tx: mpsc::Sender<AgentUpdate>,
-        _initial_config: AppConfig,
+        _config: crate::config::AppConfig,
     ) -> (Self, mpsc::Receiver<AgentMessage>) {
-        let (cmd_tx, cmd_rx) = mpsc::channel(32);
-        (Self { sender: cmd_tx }, cmd_rx)
+        let (msg_tx, msg_rx) = mpsc::channel(64);
+        (Self { sender: msg_tx }, msg_rx)
     }
 
-    /// The core agent loop. Runs inside a background task.
+    /// The main command-processing loop. Runs on a dedicated thread (see main.rs).
     pub async fn run_loop(
-        mut cmd_rx: mpsc::Receiver<AgentMessage>,
+        mut msg_rx: mpsc::Receiver<AgentMessage>,
         update_tx: mpsc::Sender<AgentUpdate>,
     ) {
-        // Load persisted config on startup (or could receive via channel from main)
-        let app_config = crate::config::load_config();
+        info!("Agent Engine loop started.");
         let mut device = DeviceBridge::new();
-        let mut rig_agent = rig_agent::RigAgent::new(app_config.llm.clone(), device.clone());
 
-        info!("Agent Engine started. Waiting for goals...");
-        let _ = update_tx
-            .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
-            .await;
+        let mut config = LlmConfig {
+            api_key: "".into(),
+            model: "gpt-4o".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            provider: "openai".into(),
+        };
 
-        // Perform an initial device list refresh
+        let mut rig_agent = rig_agent::RigAgent::new(config.clone(), device.clone());
+
+        // Initial device refresh
         Self::refresh_devices(&device, &update_tx).await;
 
-        while let Some(msg) = cmd_rx.recv().await {
+        while let Some(msg) = msg_rx.recv().await {
             match msg {
-                // ----------------------------------------------------------------
-                // Config / device management messages
-                // ----------------------------------------------------------------
-                AgentMessage::UpdateConfig(new_cfg) => {
-                    info!("Config updated: model={}", new_cfg.model);
-                    rig_agent = rig_agent::RigAgent::new(new_cfg, device.clone());
+                AgentMessage::UpdateConfig(new_config) => {
+                    info!("Updating LLM config: {:?}", new_config);
+                    config = new_config;
+                    rig_agent = rig_agent::RigAgent::new(config.clone(), device.clone());
                 }
+
                 AgentMessage::SelectDevice(id) => {
-                    info!("Device selected: {}", id);
-                    device.select_device(id.clone());
-                    let _ = update_tx
-                        .send(AgentUpdate::AgentReply(format!(
-                            "📱 Device selected: {}",
-                            id
-                        )))
-                        .await;
+                    info!("Selecting device: {}", id);
+                    device.select_device(id);
+                    rig_agent = rig_agent::RigAgent::new(config.clone(), device.clone());
                 }
+
                 AgentMessage::RefreshDevices => {
-                    info!("Refreshing device list...");
                     Self::refresh_devices(&device, &update_tx).await;
                 }
 
-                // ----------------------------------------------------------------
-                // Stop
-                // ----------------------------------------------------------------
+                AgentMessage::LaunchEmulator(name) => {
+                    info!("Launching emulator: {}", name);
+                    if let Err(e) = device.launch_emulator(&name).await {
+                        error!("Failed to launch emulator {}: {}", name, e);
+                    }
+
+                    // Poll for status changes in a separate task so we don't block the command loop
+                    let device_clone = device.clone();
+                    let update_tx_clone = update_tx.clone();
+                    let name_clone = name.clone();
+
+                    tokio::spawn(async move {
+                        info!("Polling status for launched emulator: {}", name_clone);
+                        // Poll every 2 seconds for up to 2 minutes
+                        for _ in 0..60 {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            Self::refresh_devices(&device_clone, &update_tx_clone).await;
+
+                            if let Ok(DeviceStatus::Online) =
+                                device_clone.get_avd_status(&name_clone).await
+                            {
+                                info!("Emulator {} is now Online.", name_clone);
+                                break;
+                            }
+                        }
+                    });
+                }
+
+                AgentMessage::StopEmulator(id_or_name) => {
+                    info!("Stopping emulator: {}", id_or_name);
+                    let mut serial = Some(id_or_name.clone());
+
+                    // If it's not a serial, try to find the serial for this AVD name
+                    if !id_or_name.starts_with("emulator-") {
+                        if let Ok(Some(s)) = device.find_serial_for_avd(&id_or_name).await {
+                            serial = Some(s);
+                        }
+                    }
+
+                    if let Some(s) = serial {
+                        let mut temp_bridge = device.clone();
+                        temp_bridge.select_device(s);
+                        if let Err(e) = temp_bridge.stop_emulator().await {
+                            error!("Failed to stop emulator: {}", e);
+                        }
+                    }
+
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    Self::refresh_devices(&device, &update_tx).await;
+                }
+
                 AgentMessage::Stop => {
-                    info!("Stopping Agent Engine.");
+                    info!("Stopping Agent.");
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
                     let _ = update_tx
-                        .send(AgentUpdate::AgentReply(
-                            "⏹ Goal cancelled.".to_string(),
-                        ))
+                        .send(AgentUpdate::AgentReply("⏹ Goal cancelled.".to_string()))
                         .await;
                 }
 
-                // ----------------------------------------------------------------
-                // StartGoal — the main agent loop
-                // ----------------------------------------------------------------
                 AgentMessage::StartGoal(goal) => {
-                    info!("Received new goal: {}", goal);
+                    info!("Received goal: {}", goal);
                     let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
-                            "🎯 Starting goal: \"{}\"",
+                            "🎯 Starting: \"{}\"",
                             goal
                         )))
                         .await;
-
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                         .await;
@@ -138,65 +177,68 @@ impl AgentEngine {
                     match rig_agent.think(&goal).await {
                         Ok(res) => {
                             let _ = update_tx
-                                .send(AgentUpdate::AgentReply(format!(
-                                    "✅ Goal completed: {}",
-                                    res
-                                )))
+                                .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
                                 .await;
                         }
                         Err(e) => {
-                            error!("Rig think failed: {}", e);
+                            error!("Agent failed: {}", e);
                             let _ = update_tx
                                 .send(AgentUpdate::StatusChanged(AgentStatus::Error(
                                     e.to_string(),
                                 )))
                                 .await;
-                            let _ = update_tx
-                                .send(AgentUpdate::AgentReply(format!("❌ Agent error: {}", e)))
-                                .await;
                         }
                     }
-
-                    // Return to idle
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
-                    info!("Goal processing complete. Returned to Idle.");
                 }
             }
         }
     }
 
-    /// Refresh the ADB device list and push it to the UI.
+    /// Refresh the ADB device list and AVDs and push it to the UI.
     async fn refresh_devices(device: &DeviceBridge, update_tx: &mpsc::Sender<AgentUpdate>) {
-        match device.list_devices().await {
-            Ok(devices) => {
-                info!("Found {} device(s)", devices.len());
-                let _ = update_tx.send(AgentUpdate::DeviceList(devices)).await;
-            }
-            Err(e) => {
-                warn!("Failed to list ADB devices: {}", e);
-                let _ = update_tx.send(AgentUpdate::DeviceList(vec![])).await;
+        info!("Refreshing device list...");
+        let mut final_list = Vec::new();
+
+        // 1. Get all registered AVD names
+        let avds = device.list_avds().await.unwrap_or_default();
+
+        // 2. Get currently online ADB serials
+        let online_serials = device.list_devices().await.unwrap_or_default();
+
+        // 3. Map AVDs to their current status
+        for name in avds {
+            let status = device
+                .get_avd_status(&name)
+                .await
+                .unwrap_or(DeviceStatus::Offline);
+
+            // If the AVD is online, get_avd_status logic uses its serial.
+            // We want the UI to primarily show the AVD name.
+            final_list.push((name, status));
+        }
+
+        // 4. Add any online devices that are NOT emulators (e.g. physical hardware)
+        for serial in online_serials {
+            if !serial.starts_with("emulator-") {
+                final_list.push((serial, DeviceStatus::Online));
             }
         }
+
+        let _ = update_tx.send(AgentUpdate::DeviceList(final_list)).await;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_agent_engine_uses_rig_agent() {
-        // This is a placeholder test to drive the integration.
-        // We'll check if RigAgent can be used within the engine context.
-        let config = LlmConfig::default();
-        let _rig = rig_agent::RigAgent::new(config, DeviceBridge::new());
-        // The real verification will be in the implementation of run_loop.
-        assert!(true);
+    async fn test_agent_engine_init() {
+        let (update_tx, _) = mpsc::channel(1);
+        let config = crate::config::AppConfig::default();
+        let (_engine, _) = AgentEngine::start(update_tx, config);
     }
 }

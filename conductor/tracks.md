@@ -12,5 +12,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: update the device management, show all list registered emulator inculde connected devices and able to launch/close an emulator by just clicking start/stop icon.**
+- [x] **Track: update the device management, show all list registered emulator inculde connected devices and able to launch/close an emulator by just clicking start/stop icon.**
 *Link: [./tracks/device-management_20260330/](./tracks/device-management_20260330/)*
