@@ -9,3 +9,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: Fix Chat Input Lag and Selection Issue**
 *Link: [./tracks/fix-chat-input-lag_20260313/](./tracks/fix-chat-input-lag_20260313/)*
+
+---
+
+- [~] **Track: UI Layout Polish & UX Refinement**
+*Link: [./tracks/ui-polish_20260402/](./tracks/ui-polish_20260402/)*
