@@ -10,14 +10,13 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Sidebar Polish' (Protocol in workflow.md)
 
 ## Phase 3: Layout Stability & Text Wrapping
-- [x] Task: Fix sidebar device name overlap for long AVD names.
-    - [x] Apply `min_w_0()` and `flex_1()` to device name container.
-    - [x] Add `overflow_hidden()` to prevent text spillover.
-- [x] Task: Fix chat bubble height calculation for wrapped text.
-    - [x] Add `min_h_auto()` and `flex_shrink_0()` to chat message bubbles.
-    - [x] Ensure inner text containers have `w_full()` to report correct height.
-    - [x] Ensure vertical spacing in `chat-list` respects dynamic bubble heights.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Layout Stability & Text Wrapping' (Protocol in workflow.md)
+- [ ] Task: Fix sidebar device name overlap for long AVD names.
+    - [ ] Apply `min_w_0()` and `flex_1()` to device name container.
+    - [ ] Add `overflow_hidden()` to prevent text spillover.
+- [ ] Task: Fix chat bubble height calculation for wrapped text.
+    - [ ] Add `h_fit()` to chat message bubbles.
+    - [ ] Ensure vertical spacing in `chat-list` respects dynamic bubble heights.
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Layout Stability & Text Wrapping' (Protocol in workflow.md)
 
 ## Final Verification
 - [ ] All acceptance criteria met

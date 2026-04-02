@@ -1343,6 +1343,7 @@ impl MobieWorkspace {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap(px(4.0))
                         .py_2()
                         .px_1()
                         .rounded(px(6.0))
@@ -1350,6 +1351,8 @@ impl MobieWorkspace {
                         .child(
                             div()
                                 .flex()
+                                .flex_1()
+                                .min_w_0()
                                 .items_center()
                                 .gap(px(8.0))
                                 .cursor_pointer()
@@ -1381,10 +1384,14 @@ impl MobieWorkspace {
                                         .rounded(px(5.0))
                                         .bg(dot_color)
                                         .border_1()
-                                        .border_color(dot_border),
+                                        .border_color(dot_border)
+                                        .flex_shrink_0(),
                                 )
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
                                         .text_sm()
                                         .font_weight(if is_selected {
                                             FontWeight::SEMIBOLD
@@ -1396,7 +1403,7 @@ impl MobieWorkspace {
                                 ),
                         )
                         .child(
-                            div().flex().gap(px(4.0)).child(match status {
+                            div().flex_shrink_0().child(match status {
                                 DeviceStatus::Offline => {
                                     let name = dev.clone();
                                     let tx = tx.clone();
@@ -1514,12 +1521,13 @@ impl MobieWorkspace {
                     .p(px(16.0))
                     .flex()
                     .flex_col()
-                    .gap(px(12.0))
+                    .gap(px(16.0))
                     .children(self.messages.iter().map(|msg| {
-                        let (bg, text_col, is_user) = match msg.role {
-                            ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff), true),
-                            ChatRole::Agent => (rgb(0x0f3460), rgb(0xccddff), false),
-                            ChatRole::System => (rgb(0x2a2a4a), rgb(0x888899), false),
+                        let is_user = matches!(msg.role, ChatRole::User);
+                        let (bg, text_col) = match msg.role {
+                            ChatRole::User => (rgb(0x16213e), rgb(0xeeeeff)),
+                            ChatRole::Agent => (rgb(0x0f3460), rgb(0xccddff)),
+                            ChatRole::System => (rgb(0x2a2a4a), rgb(0x888899)),
                         };
 
                         let label = match msg.role {
@@ -1528,37 +1536,35 @@ impl MobieWorkspace {
                             ChatRole::System => "System",
                         };
 
-                        let msg_row = if is_user {
-                            div().flex().flex_row_reverse()
-                        } else {
-                            div().flex()
-                        };
-
-                        msg_row.child(
-                            div()
-                                .max_w(px(600.0)) // Max width for message bubbles
-                                .w_full()
-                                .bg(bg)
-                                .rounded(px(12.0))
-                                .p(px(12.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(0x666688))
-                                        .child(label.to_string()),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(text_col)
-                                        .whitespace_normal() // Ensure text wraps
-                                        .child(msg.content.clone()),
-                                ),
-                        )
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_end()
+                            .when(!is_user, |d| d.items_start())
+                            .child(
+                                div()
+                                    .max_w(px(600.0))
+                                    .flex()
+                                    .flex_col()
+                                    .flex_shrink_0()
+                                    .bg(bg)
+                                    .rounded(px(12.0))
+                                    .p(px(12.0))
+                                    .gap(px(4.0))
+                                    .text_sm()
+                                    .text_color(text_col)
+                                    .whitespace_normal()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(0x666688))
+                                            .child(label.to_string()),
+                                    )
+                                    .child(msg.content.clone()),
+                            )
                     })),
             )
     }
