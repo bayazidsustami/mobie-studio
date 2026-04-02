@@ -992,11 +992,7 @@ impl MobieWorkspace {
                                         .find(|(_, s)| *s == DeviceStatus::Online)
                                         .map(|(id, _)| id.clone());
                                 }
-                                workspace.messages.push(ChatMessage {
-                                    role: ChatRole::System,
-                                    content: format!("✅ Found {} device(s)/AVDs.", count),
-                                });
-                                workspace.chat_scroll_handle.scroll_to_bottom();
+                                info!("Found {} device(s)/AVDs.", count);
                             }
                         }
                         cx.notify();
