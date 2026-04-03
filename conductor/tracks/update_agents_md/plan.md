@@ -9,17 +9,17 @@ Update the `AGENTS.md` documentation to accurately reflect recent architectural 
 
 ## Implementation Steps
 
-### 1. Update Core Modules Section
+### 1. Update Core Modules Section [x] (efd7194)
 - Modify the `LLM Client` description to state that it utilizes the `rig-core` framework for native tool calling instead of manual JSON parsing.
 - Mention the inclusion of custom HTTP headers (e.g., `HTTP-Referer`, `X-Title`) via `reqwest` to support OpenRouter BYOK functionality.
 
-### 2. Rewrite "The Agent Loop"
+### 2. Rewrite "The Agent Loop" [x] (f22d22b)
 - Replace the rigid 4-step manual loop (Observe -> Think -> Act -> Verify) with a description of the agent-driven loop powered by `rig-core`.
 - Detail how the agent autonomously invokes tools (`Tap`, `Input`, `Swipe`, `Observe`, `KeyEvent`).
 - Explain the implementation of advanced reasoning patterns: Multi-step Planning (Plan -> Execute) and Session Memory tracking for loop prevention.
 - Note the configuration allowing for extended iterations (e.g., up to 20 turns) to reach the goal.
 
-### 3. Update Decision Log
+### 3. Update Decision Log [x] (ad80763)
 - Add an entry reflecting the decision to use the `rig-core` framework for managing LLM interactions and native tool support.
 
 ## Verification
