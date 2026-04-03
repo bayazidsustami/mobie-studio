@@ -942,6 +942,7 @@ pub struct MobieWorkspace {
     current_view: AppView,
     devices: Vec<(String, DeviceStatus)>,
     selected_device: Option<String>,
+    latest_test: Option<std::path::PathBuf>,
 
     // Inputs
     chat_input: Entity<TextInput>,
@@ -989,6 +990,17 @@ impl MobieWorkspace {
                                 }
                                 info!("Found {} device(s)/AVDs.", count);
                             }
+                            AgentUpdate::TestGenerated(path) => {
+                                workspace.latest_test = Some(path.clone());
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!(
+                                        "💾 YAML test case saved: {}",
+                                        path.file_name().unwrap_or_default().to_string_lossy()
+                                    ),
+                                });
+                                workspace.chat_scroll_handle.scroll_to_bottom();
+                            }
                         }
                         cx.notify();
                     })
@@ -1026,6 +1038,7 @@ impl MobieWorkspace {
             current_view: AppView::Chat,
             devices: vec![],
             selected_device: None,
+            latest_test: None,
             chat_input,
             settings_api_key,
             settings_model,
@@ -1060,11 +1073,28 @@ impl MobieWorkspace {
             cx.notify();
         });
 
-        let tx = self.cmd_tx.clone();
-        cx.spawn(async move |_, _| {
-            let _ = tx.send(AgentMessage::StartGoal(text)).await;
-        })
-        .detach();
+        let lower_text = text.to_lowercase();
+        if lower_text == "/retest" || lower_text == "retest the latest scenario" || lower_text == "run again" {
+            if let Some(path) = self.latest_test.clone() {
+                let tx = self.cmd_tx.clone();
+                cx.spawn(async move |_, _| {
+                    let _ = tx.send(AgentMessage::RetestScenario(path)).await;
+                })
+                .detach();
+            } else {
+                self.messages.push(ChatMessage {
+                    role: ChatRole::System,
+                    content: "❌ No previous test scenario available to retest.".to_string(),
+                });
+                self.chat_scroll_handle.scroll_to_bottom();
+            }
+        } else {
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::StartGoal(text)).await;
+            })
+            .detach();
+        }
 
         cx.notify();
     }

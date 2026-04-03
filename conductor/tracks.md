@@ -12,3 +12,11 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: UI Layout Polish & UX Refinement**
 *Link: [./archive/ui-polish_20260402/](./archive/ui-polish_20260402/)*
+
+- [x] **Track: Retest Latest Scenario**
+*Link: [./archive/retest_latest_scenario_20260403/](./archive/retest_latest_scenario_20260403/)*
+
+---
+
+## [ ] Track: Next Feature
+*Placeholder for next track*
