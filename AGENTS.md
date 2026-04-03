@@ -23,7 +23,7 @@ The application operates within a single process, utilizing asynchronous Rust ta
 1. **Frontend (GPUI):** Manages the chat interface, LLM provider settings (BYOK model), device selection, and displays the generated YAML outputs.
 2. **Agent Engine (Async Task Manager):** Handles the state machine for the active session and multi-step planning, communicating progress back to the UI via asynchronous channels (`mpsc`).
 3. **Device Bridge (ADB Interactor):** A dedicated module executing `std::process::Command` calls to local `adb` binaries for device discovery, UI dumping, and action execution.
-4. **LLM Client (`rig-core`):** Utilizes `reqwest` to interact with LLMs, injecting custom headers (e.g., `HTTP-Referer`, `X-Title`) for OpenRouter BYOK compatibility. It utilizes the `rig-core` AI framework to bind Rust structs as native tools that the agent can autonomously invoke, replacing manual JSON action parsing.
+4. **LLM Client (`rig-core`):** Integrates the `rig-core` AI framework to facilitate native tool calling, replacing the need for manual JSON action parsing. It utilizes `reqwest` to securely interact with LLM providers like OpenRouter, injecting mandatory headers (e.g., `HTTP-Referer`, `X-Title`) required for Bring-Your-Own-Key (BYOK) functionality. This allows the agent to autonomously bind Rust-defined tools directly to the LLM's reasoning process.
 
 ## The Agent Loop
 Instead of a rigid hardcoded loop, the Agent Engine uses an autonomous, tool-driven loop managed natively by the `rig-core` framework. When a user submits a goal:
