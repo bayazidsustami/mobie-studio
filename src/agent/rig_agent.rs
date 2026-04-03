@@ -1,15 +1,17 @@
 use crate::agent::tools::{Input, KeyEvent, Observe, Swipe, Tap};
 use crate::device::DeviceBridge;
 use crate::llm::LlmConfig;
+use crate::yaml_exporter::TestStep;
 use reqwest::header::{HeaderMap, HeaderValue};
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::providers::openai;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct RigAgent {
     config: LlmConfig,
     device: Arc<DeviceBridge>,
+    pub history: Arc<Mutex<Vec<TestStep>>>,
 }
 
 impl RigAgent {
@@ -17,6 +19,7 @@ impl RigAgent {
         Self {
             config,
             device: Arc::new(device),
+            history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -52,13 +55,18 @@ impl RigAgent {
     pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
 
+        // Clear history before starting a new session/goal
+        if let Ok(mut h) = self.history.lock() {
+            h.clear();
+        }
+
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
-            .tool(Tap { device: self.device.clone() })
-            .tool(Input { device: self.device.clone() })
-            .tool(Swipe { device: self.device.clone() })
-            .tool(KeyEvent { device: self.device.clone() })
-            .tool(Observe { device: self.device.clone() })
+            .tool(Tap { device: self.device.clone(), history: self.history.clone() })
+            .tool(Input { device: self.device.clone(), history: self.history.clone() })
+            .tool(Swipe { device: self.device.clone(), history: self.history.clone() })
+            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone() })
+            .tool(Observe { device: self.device.clone(), history: self.history.clone() })
             .build();
 
         // Use max_turns to allow the agent to iterate
