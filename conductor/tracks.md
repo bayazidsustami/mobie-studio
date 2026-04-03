@@ -10,5 +10,3 @@ This file tracks all major tracks for the project. Each track has its own detail
 - [x] **Track: Fix Chat Input Lag and Selection Issue**
 *Link: [./tracks/fix-chat-input-lag_20260313/](./tracks/fix-chat-input-lag_20260313/)*
 
-- [ ] **Track: Update AGENTS.md**
-*Link: [./tracks/update_agents_md/](./tracks/update_agents_md/)*
