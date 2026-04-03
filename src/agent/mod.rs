@@ -34,6 +34,8 @@ pub enum AgentMessage {
     LaunchEmulator(String),
     /// Stop an emulator by ID.
     StopEmulator(String),
+    /// Replay an existing YAML test case, bypassing LLM reasoning.
+    RetestScenario(std::path::PathBuf),
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -214,6 +216,58 @@ impl AgentEngine {
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
                 }
+
+                AgentMessage::RetestScenario(path) => {
+                    info!("Retesting scenario from: {:?}", path);
+                    let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Acting)).await;
+                    let _ = update_tx.send(AgentUpdate::AgentReply(format!("🔄 Replaying test case: {:?}", path.file_name().unwrap_or_default()))).await;
+
+                    if let Ok(yaml) = std::fs::read_to_string(&path) {
+                        if let Ok(tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
+                            for step in tc.steps {
+                                let _ = update_tx.send(AgentUpdate::AgentReply(format!("⚡ {} - {}", step.action, step.reasoning))).await;
+                                match step.action.as_str() {
+                                    "tap" => {
+                                        let x = step.params.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let y = step.params.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let _ = device.tap(x, y).await;
+                                    }
+                                    "input" => {
+                                        let text = step.params.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                        let _ = device.input_text(text).await;
+                                    }
+                                    "swipe" => {
+                                        let x = step.params.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let y = step.params.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let direction = step.params.get("direction").and_then(|v| v.as_str()).unwrap_or("up");
+                                        let distance = step.params.get("distance").and_then(|v| v.as_u64()).unwrap_or(500) as u32;
+                                        let (x2, y2) = match direction {
+                                            "up" => (x, y.saturating_sub(distance)),
+                                            "down" => (x, y + distance),
+                                            "left" => (x.saturating_sub(distance), y),
+                                            "right" => (x + distance, y),
+                                            _ => (x, y),
+                                        };
+                                        let _ = device.swipe(x, y, x2, y2, 300).await;
+                                    }
+                                    "key_event" => {
+                                        let code = step.params.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let _ = device.keyevent(code).await;
+                                    }
+                                    _ => {}
+                                }
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+                            let _ = update_tx.send(AgentUpdate::AgentReply("✅ Replay complete.".to_string())).await;
+                        } else {
+                            let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to parse test case.".to_string())).await;
+                        }
+                    } else {
+                        let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to read test case file.".to_string())).await;
+                    }
+                    
+                    let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Idle)).await;
+                }
             }
         }
     }
@@ -270,6 +324,16 @@ mod tests {
             assert_eq!(p.to_str().unwrap(), "test.yaml");
         } else {
             panic!("TestGenerated not found");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_handles_retest_scenario_msg() {
+        let msg = AgentMessage::RetestScenario(std::path::PathBuf::from("test.yaml"));
+        if let AgentMessage::RetestScenario(p) = msg {
+            assert_eq!(p.to_str().unwrap(), "test.yaml");
+        } else {
+            panic!("RetestScenario not found");
         }
     }
 }

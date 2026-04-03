@@ -1073,11 +1073,28 @@ impl MobieWorkspace {
             cx.notify();
         });
 
-        let tx = self.cmd_tx.clone();
-        cx.spawn(async move |_, _| {
-            let _ = tx.send(AgentMessage::StartGoal(text)).await;
-        })
-        .detach();
+        let lower_text = text.to_lowercase();
+        if lower_text == "/retest" || lower_text == "retest the latest scenario" || lower_text == "run again" {
+            if let Some(path) = self.latest_test.clone() {
+                let tx = self.cmd_tx.clone();
+                cx.spawn(async move |_, _| {
+                    let _ = tx.send(AgentMessage::RetestScenario(path)).await;
+                })
+                .detach();
+            } else {
+                self.messages.push(ChatMessage {
+                    role: ChatRole::System,
+                    content: "❌ No previous test scenario available to retest.".to_string(),
+                });
+                self.chat_scroll_handle.scroll_to_bottom();
+            }
+        } else {
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::StartGoal(text)).await;
+            })
+            .detach();
+        }
 
         cx.notify();
     }
