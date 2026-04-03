@@ -14,7 +14,7 @@ Mobie Studio empowers mobile-first QA, Engineers, and non-technical staff to run
 ## Core Value Proposition
 - **Zero-Effort Setup:** Eliminates the deep learning curve and configuration hell of traditional mobile testing frameworks. 
 - **Conversational Interface:** Users dictate test goals in plain English.
-- **Autonomous Agent Loop:** The agent uses an Observe -> Think -> Act -> Verify loop with implicit waits to handle dynamic UIs like a human would.
+- **Autonomous Agent Loop:** The agent uses a tool-driven loop powered by the rig-core framework, incorporating multi-step planning and session memory to handle dynamic UIs like a human would.
 - **Integrated Emulator Management:** View all registered Android Virtual Devices (AVDs) and launch or stop them directly within the app, streamlining the testing workflow.
 - **Deterministic CI/CD Output:** Successful exploratory AI runs generate strict, step-by-step YAML test cases, ensuring fast, deterministic replay in CI/CD pipelines without incurring LLM latency or non-determinism.
 

@@ -23,10 +23,10 @@ Mobie Studio empowers mobile-first QA and Engineers to run automated mobile test
 
 ### The Agent Loop
 
-1. **Observe** — Pull XML UI dump via ADB
-2. **Think** — Send compressed XML + user goal to LLM
-3. **Act** — Execute LLM's decided action via ADB input commands
-4. **Verify** — Repeat; the agent handles timing by observing subsequent dumps
+1. **Strategic Planning** — Decompose high-level goals into dynamic sub-goals.
+2. **Tool Execution** — Autonomously invoke tools (`Tap`, `Swipe`, `Input`, `Observe`, `KeyEvent`).
+3. **Session Memory** — Track actions and observations to prevent loops and self-correct.
+4. **Implicit Verification** — Observe state changes and verify progress iteratively until the goal is reached.
 
 ## Tech Stack
 

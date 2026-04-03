@@ -23,19 +23,23 @@ The application operates within a single process, utilizing asynchronous Rust ta
 1. **Frontend (GPUI):** Manages the chat interface, LLM provider settings (BYOK model), device selection, and displays the generated YAML outputs.
 2. **Agent Engine (Async Task Manager):** Handles the state machine for the active session and multi-step planning, communicating progress back to the UI via asynchronous channels (`mpsc`).
 3. **Device Bridge (ADB Interactor):** A dedicated module executing `std::process::Command` calls to local `adb` binaries for device discovery, UI dumping, and action execution.
-4. **LLM Client (`rig-core`):** Utilizes `reqwest` to interact with LLMs, injecting custom headers (e.g., `HTTP-Referer`, `X-Title`) for OpenRouter BYOK compatibility. It utilizes the `rig-core` AI framework to bind Rust structs as native tools that the agent can autonomously invoke, replacing manual JSON action parsing.
+4. **LLM Client (`rig-core`):** Integrates the `rig-core` AI framework to facilitate native tool calling, replacing the need for manual JSON action parsing. It utilizes `reqwest` to securely interact with LLM providers like OpenRouter, injecting mandatory headers (e.g., `HTTP-Referer`, `X-Title`) required for Bring-Your-Own-Key (BYOK) functionality. This allows the agent to autonomously bind Rust-defined tools directly to the LLM's reasoning process.
 
 ## The Agent Loop
-Instead of a rigid hardcoded loop, the Agent Engine uses an autonomous, tool-driven loop managed natively by the `rig-core` framework. When a user submits a goal:
-1. **Multi-step Planning:** The agent can decompose the high-level goal into logical sub-goals.
-2. **Tool Execution:** The agent natively decides to use tools like `Observe`, `Tap`, `Input`, or `Swipe` to fulfill the active sub-goal.
-3. **Iterative Verification:** The agent is configured to allow up to 20 maximum iterations (`max_turns(20)`) to act, evaluate the changed UI state via the `Observe` tool, and self-correct using session memory if it encounters an error or a repetitive loop.
+Instead of a hardcoded state machine, the Agent Engine utilizes an autonomous, tool-driven loop powered by the `rig-core` framework. When a user submits a high-level goal, the agent initiates a multi-step execution cycle:
+
+1. **Strategic Planning:** The agent decomposes the goal into a sequence of logical sub-goals, which are updated dynamically as the UI state changes.
+2. **Autonomous Tool Invocation:** Based on the current sub-goal, the agent decides which atomic tools to invoke (e.g., `Tap`, `Input`, `Swipe`, `Observe`, `KeyEvent`).
+3. **Implicit Verification:** After each action, the agent automatically triggers the `Observe` tool to capture the resulting UI state. It then evaluates this new state against its internal objectives.
+4. **Session Memory & Loop Prevention:** The agent maintains a persistent `SessionHistory` that tracks recent actions and observations. This prevents repetitive failure loops and allows the agent to self-correct by attempting alternative paths.
+
+The loop is configured with a high iteration limit (e.g., `max_turns(20)`) to allow sufficient time for complex navigation and exploratory tasks. It continues until the goal is achieved, a terminal failure is encountered, or the iteration limit is reached.
 
 ## Decision Log
 - **Architecture:** Monolithic GPUI + Rust desktop app.
-- **AI Framework:** `rig-core` for LLM provider abstraction and native tool calling.
-- **Agent Loop:** Agent-driven tool invocation (`max_turns` iteration) with implicit wait, multi-step planning, and session memory.
-- **LLM Strategy:** Bring-Your-Own-Key (BYOK) with OpenRouter support via custom HTTP headers.
+- **AI Framework:** Migrated from manual JSON parsing to `rig-core` for LLM provider abstraction, native tool calling, and structured reasoning.
+- **Agent Loop:** Transitioned to an autonomous, tool-driven loop with multi-step planning, session memory tracking, and implicit verification.
+- **LLM Strategy:** Bring-Your-Own-Key (BYOK) with OpenRouter support via mandatory custom HTTP headers.
 - **Test Output:** Auto-generated declarative YAML test cases after successful exploratory runs.
 
 ## Development Workflow
