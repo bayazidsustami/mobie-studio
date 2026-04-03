@@ -942,6 +942,7 @@ pub struct MobieWorkspace {
     current_view: AppView,
     devices: Vec<(String, DeviceStatus)>,
     selected_device: Option<String>,
+    latest_test: Option<std::path::PathBuf>,
 
     // Inputs
     chat_input: Entity<TextInput>,
@@ -989,6 +990,17 @@ impl MobieWorkspace {
                                 }
                                 info!("Found {} device(s)/AVDs.", count);
                             }
+                            AgentUpdate::TestGenerated(path) => {
+                                workspace.latest_test = Some(path.clone());
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!(
+                                        "💾 YAML test case saved: {}",
+                                        path.file_name().unwrap_or_default().to_string_lossy()
+                                    ),
+                                });
+                                workspace.chat_scroll_handle.scroll_to_bottom();
+                            }
                         }
                         cx.notify();
                     })
@@ -1026,6 +1038,7 @@ impl MobieWorkspace {
             current_view: AppView::Chat,
             devices: vec![],
             selected_device: None,
+            latest_test: None,
             chat_input,
             settings_api_key,
             settings_model,

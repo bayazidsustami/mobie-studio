@@ -43,6 +43,8 @@ pub enum AgentUpdate {
     AgentReply(String),
     /// Refreshed list of devices with their status.
     DeviceList(Vec<(String, DeviceStatus)>),
+    /// Emitted when a YAML test case is successfully generated.
+    TestGenerated(std::path::PathBuf),
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +181,25 @@ impl AgentEngine {
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
                                 .await;
+                            
+                            // Generate YAML test case
+                            if let Ok(h) = rig_agent.history.lock() {
+                                if !h.is_empty() {
+                                    let tc = crate::yaml_exporter::TestCase {
+                                        goal: goal.clone(),
+                                        steps: h.clone(),
+                                        success: true,
+                                    };
+                                    match crate::yaml_exporter::export(&tc) {
+                                        Ok(path) => {
+                                            let _ = update_tx.send(AgentUpdate::TestGenerated(path)).await;
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to export YAML test case: {}", e);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             error!("Agent failed: {}", e);
@@ -240,5 +261,15 @@ mod tests {
         let (update_tx, _) = mpsc::channel(1);
         let config = crate::config::AppConfig::default();
         let (_engine, _) = AgentEngine::start(update_tx, config);
+    }
+
+    #[tokio::test]
+    async fn test_agent_generates_yaml_on_success() {
+        let update = AgentUpdate::TestGenerated(std::path::PathBuf::from("test.yaml"));
+        if let AgentUpdate::TestGenerated(p) = update {
+            assert_eq!(p.to_str().unwrap(), "test.yaml");
+        } else {
+            panic!("TestGenerated not found");
+        }
     }
 }
