@@ -16,7 +16,7 @@ Mobie Studio empowers mobile-first QA, Engineers, and non-technical staff to run
 - **Conversational Interface:** Users dictate test goals in plain English.
 - **Autonomous Agent Loop:** The agent uses a tool-driven loop powered by the rig-core framework, incorporating multi-step planning and session memory to handle dynamic UIs like a human would.
 - **Integrated Emulator Management:** View all registered Android Virtual Devices (AVDs) and launch or stop them directly within the app, streamlining the testing workflow.
-- **Deterministic CI/CD Output:** Successful exploratory AI runs generate strict, step-by-step YAML test cases, ensuring fast, deterministic replay in CI/CD pipelines without incurring LLM latency or non-determinism.
+- **Deterministic Replay & CI/CD Output:** Successful exploratory AI runs generate strict, step-by-step YAML test cases. Users can immediately "retest" these scenarios in the UI, ensuring fast, deterministic replay without incurring LLM latency before committing them to CI/CD pipelines.
 
 ## Future Scope
 While initially focused on Android (via ADB) and structural XML dumps, the product roadmap includes:
