@@ -37,9 +37,9 @@ The loop is configured with a high iteration limit (e.g., `max_turns(20)`) to al
 
 ## Decision Log
 - **Architecture:** Monolithic GPUI + Rust desktop app.
-- **AI Framework:** `rig-core` for LLM provider abstraction and native tool calling.
-- **Agent Loop:** Agent-driven tool invocation (`max_turns` iteration) with implicit wait, multi-step planning, and session memory.
-- **LLM Strategy:** Bring-Your-Own-Key (BYOK) with OpenRouter support via custom HTTP headers.
+- **AI Framework:** Migrated from manual JSON parsing to `rig-core` for LLM provider abstraction, native tool calling, and structured reasoning.
+- **Agent Loop:** Transitioned to an autonomous, tool-driven loop with multi-step planning, session memory tracking, and implicit verification.
+- **LLM Strategy:** Bring-Your-Own-Key (BYOK) with OpenRouter support via mandatory custom HTTP headers.
 - **Test Output:** Auto-generated declarative YAML test cases after successful exploratory runs.
 
 ## Development Workflow
