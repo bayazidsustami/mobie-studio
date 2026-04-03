@@ -9,13 +9,13 @@ Enable users to "retest the latest scenario" by leveraging the auto-generated YA
   - Modify `src/agent/rig_agent.rs` to maintain an `Arc<Mutex<Vec<TestStep>>>` per session.
   - Pass this shared state to each tool implementation in `src/agent/tools.rs`.
   - Inside each tool's `call` method, append a new `TestStep` containing the action name, parameters, and the agent's reasoning to the shared history.
-- [ ] Task 2: Generate YAML on Successful Run
+- [x] Task 2: Generate YAML on Successful Run 11c49fa
   - In `src/agent/mod.rs` (inside `run_loop`), after a successful `rig_agent.think(&goal)` invocation:
     - Retrieve the recorded `TestStep`s.
     - Construct a `TestCase` using the original goal and the steps.
     - Call `yaml_exporter::export(&test_case)`.
   - Introduce a new `AgentUpdate::TestGenerated(PathBuf)` and send it back to the UI upon successful export.
-- [ ] Task 3: Update UI to Store Latest Test
+- [x] Task 3: Update UI to Store Latest Test 11c49fa
   - In `src/ui/mod.rs`, add a `latest_test: Option<PathBuf>` field to the main application state.
   - When `AgentUpdate::TestGenerated(path)` is received, update `latest_test` and optionally show a visual indicator in the chat.
 - [ ] Task 4: Implement the "Retest" Command
