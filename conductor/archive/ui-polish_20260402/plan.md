@@ -17,9 +17,9 @@
     - [x] Add `min_h_auto()` and `flex_shrink_0()` to chat message bubbles.
     - [x] Ensure inner text containers have `w_full()` to report correct height.
     - [x] Ensure vertical spacing in `chat-list` respects dynamic bubble heights.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Layout Stability & Text Wrapping' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Layout Stability & Text Wrapping' (Protocol in workflow.md)
 
 ## Final Verification
-- [ ] All acceptance criteria met
-- [ ] UI remains responsive
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] UI remains responsive
+- [x] Ready for review
