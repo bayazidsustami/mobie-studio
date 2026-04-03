@@ -2,7 +2,7 @@ use gpui::*;
 use mobie::agent::AgentEngine;
 use mobie::config::load_config;
 use mobie::ui::{
-    Backspace, CancelGoal, Copy, Cut, Delete, Enter, MobieWorkspace, MoveEnd, MoveHome, MoveLeft,
+    Backspace, CancelGoal, Copy, Cut, Delete, MobieWorkspace, MoveEnd, MoveHome, MoveLeft,
     MoveRight, Paste, SaveSettings, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight,
     SendMessage,
 };
@@ -19,7 +19,7 @@ fn main() {
     Application::new().run(move |app| {
         // Bind key actions
         app.bind_keys([
-            KeyBinding::new("enter", Enter, None),
+            KeyBinding::new("enter", SendMessage, None),
             KeyBinding::new("cmd-enter", SendMessage, None),
             KeyBinding::new("ctrl-enter", SendMessage, None),
             KeyBinding::new("escape", CancelGoal, None),

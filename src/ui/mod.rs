@@ -26,7 +26,6 @@ actions!(
         Backspace,
         Delete,
         SelectAll,
-        Enter,
         Copy,
         Cut,
         Paste,
@@ -272,10 +271,6 @@ impl TextInput {
         }
     }
 
-    fn enter(&mut self, _: &Enter, _window: &mut Window, cx: &mut Context<Self>) {
-        cx.dispatch_action(&SendMessage);
-    }
-
     fn shape_text(&self, window: &mut Window, width: Pixels) -> SmallVec<[WrappedLine; 1]> {
         let display_text = if self.text.is_empty() {
             self.placeholder.clone()
@@ -348,7 +343,6 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::enter))
             .child(TextInputElement {
                 view: cx.entity().clone(),
             })
@@ -1571,24 +1565,56 @@ impl MobieWorkspace {
 
     fn render_input_area(&self, _window: &Window, cx: &mut Context<Self>) -> Div {
         let is_idle = self.agent_status == AgentStatus::Idle;
+        let has_text = !self.chat_input.read(cx).text().is_empty();
+        let can_send = is_idle && has_text;
 
         div()
             .border_t_1()
             .border_color(rgb(0x2a2a4a))
             .p(px(16.0))
             .w_full()
+            .flex()
+            .items_end()
+            .gap(px(12.0))
             .child(
                 div()
-                    .w_full()
+                    .flex_1()
                     .bg(rgb(0x16213e))
                     .rounded(px(12.0))
                     .p(px(14.0))
-                    .flex()
-                    .flex_col()
-                    .child(self.chat_input.clone())
-                    .when(
-                        is_idle && !self.chat_input.read(cx).text().is_empty(),
-                        |d| d.child(div().text_xs().text_color(rgb(0x666688)).child("↵ Enter")),
+                    .child(self.chat_input.clone()),
+            )
+            .child(
+                div()
+                    .cursor_pointer()
+                    .bg(if can_send {
+                        rgb(0xe94560)
+                    } else {
+                        rgb(0x2a2a4a)
+                    })
+                    .hover(|s| {
+                        if can_send {
+                            s.bg(rgb(0xff5c77))
+                        } else {
+                            s
+                        }
+                    })
+                    .rounded(px(12.0))
+                    .py(px(14.0))
+                    .px(px(20.0))
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(if can_send {
+                        rgb(0xffffff)
+                    } else {
+                        rgb(0x888899)
+                    })
+                    .child("Send")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.send_message(&SendMessage, window, cx);
+                        }),
                     ),
             )
     }
