@@ -18,7 +18,7 @@ Enable users to "retest the latest scenario" by leveraging the auto-generated YA
 - [x] Task 3: Update UI to Store Latest Test 11c49fa
   - In `src/ui/mod.rs`, add a `latest_test: Option<PathBuf>` field to the main application state.
   - When `AgentUpdate::TestGenerated(path)` is received, update `latest_test` and optionally show a visual indicator in the chat.
-- [ ] Task 4: Implement the "Retest" Command
+- [x] Task 4: Implement the "Retest" Command 5e330f4
   - Add `AgentMessage::RetestScenario(PathBuf)` to the engine messages.
   - In `src/ui/mod.rs`'s chat input handler, parse intents like `/retest`. If detected, ensure `latest_test` is `Some`, and dispatch `AgentMessage::RetestScenario`.
   - In `src/agent/mod.rs`'s `run_loop`, handle `RetestScenario(path)`:
