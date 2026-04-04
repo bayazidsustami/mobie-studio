@@ -43,9 +43,9 @@ Implement the global toggle and automated post-action capture logic.
 Implement the logic for saving screenshots with the specified naming and directory structure.
 
 ### Tasks
-- [ ] Task 4.1: Implement Screenshot Storage Logic. Create logic to resolve the relative `screenshots/` directory based on the test file path and ensure it is created lazily.
-- [ ] Task 4.2: Implement Sequential Naming. Ensure files are named `step_<NN>_<action_name>.png` where `<NN>` is the step sequence number.
-- [ ] Task 4.3: Write unit and integration tests for storage path resolution and naming consistency.
+- [x] Task 4.1: Implement Screenshot Storage Logic. Create logic to resolve the relative `screenshots/` directory based on the test file path and ensure it is created lazily. 44366da
+- [x] Task 4.2: Implement Sequential Naming. Ensure files are named `step_<NN>_<action_name>.png` where `<NN>` is the step sequence number. 44366da
+- [x] Task 4.3: Write unit and integration tests for storage path resolution and naming consistency. 44366da
 - [ ] Task 4.4: Conductor - User Manual Verification 'Phase 4: Storage & Naming Convention' (Protocol in workflow.md)
 
 ## Final Verification

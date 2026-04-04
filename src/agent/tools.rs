@@ -59,6 +59,11 @@ impl Tool for Tap {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
         
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("x".to_string(), json!(args.x));
         params.insert("y".to_string(), json!(args.y));
@@ -67,11 +72,8 @@ impl Tool for Tap {
                 action: "tap".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
-        }
-
-        if self.screenshots {
-            let _ = self.device.screenshot().await;
         }
 
         Ok(format!(
@@ -126,6 +128,11 @@ impl Tool for Input {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
             
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("text".to_string(), json!(args.text));
         if let Ok(mut h) = self.history.lock() {
@@ -133,11 +140,8 @@ impl Tool for Input {
                 action: "input".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
-        }
-
-        if self.screenshots {
-            let _ = self.device.screenshot().await;
         }
 
         Ok(format!(
@@ -217,6 +221,11 @@ impl Tool for Swipe {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
 
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("direction".to_string(), json!(args.direction));
         params.insert("x".to_string(), json!(args.x));
@@ -229,11 +238,8 @@ impl Tool for Swipe {
                 action: "swipe".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
-        }
-
-        if self.screenshots {
-            let _ = self.device.screenshot().await;
         }
 
         Ok(format!(
@@ -288,6 +294,11 @@ impl Tool for KeyEvent {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
             
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("code".to_string(), json!(args.code));
         if let Ok(mut h) = self.history.lock() {
@@ -295,11 +306,8 @@ impl Tool for KeyEvent {
                 action: "key_event".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
-        }
-
-        if self.screenshots {
-            let _ = self.device.screenshot().await;
         }
 
         Ok(format!(
@@ -345,7 +353,7 @@ impl Tool for Screenshot {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.device
+        let screenshot = self.device
             .screenshot()
             .await
             .map_err(|e| ToolError(e.to_string()))?;
@@ -356,6 +364,7 @@ impl Tool for Screenshot {
                 action: "screenshot".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot: Some(screenshot),
             });
         }
 
@@ -416,6 +425,7 @@ impl Tool for Observe {
                 action: "observe".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot: None,
             });
         }
 

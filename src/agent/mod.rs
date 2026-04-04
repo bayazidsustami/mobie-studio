@@ -226,6 +226,7 @@ impl AgentEngine {
 
                     if let Ok(yaml) = std::fs::read_to_string(&path) {
                         if let Ok(tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
+                            let mut retest_steps = Vec::new();
                             for step in tc.steps {
                                 let _ = update_tx.send(AgentUpdate::AgentReply(format!("⚡ {} - {}", step.action, step.reasoning))).await;
                                 match step.action.as_str() {
@@ -262,12 +263,28 @@ impl AgentEngine {
                                     _ => {}
                                 }
 
+                                let mut retest_step = step.clone();
                                 if tc.screenshots && step.action != "screenshot" && step.action != "observe" {
-                                    let _ = device.screenshot().await;
+                                    retest_step.screenshot = device.screenshot().await.ok();
+                                } else if step.action == "screenshot" {
+                                    retest_step.screenshot = device.screenshot().await.ok();
                                 }
+                                retest_steps.push(retest_step);
 
                                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                             }
+
+                            // Export retest results if screenshots were taken
+                            if tc.screenshots {
+                                let retest_tc = crate::yaml_exporter::TestCase {
+                                    goal: format!("Retest: {}", tc.goal),
+                                    screenshots: true,
+                                    steps: retest_steps,
+                                    success: true,
+                                };
+                                let _ = crate::yaml_exporter::export(&retest_tc);
+                            }
+
                             let _ = update_tx.send(AgentUpdate::AgentReply("✅ Replay complete.".to_string())).await;
                         } else {
                             let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to parse test case.".to_string())).await;

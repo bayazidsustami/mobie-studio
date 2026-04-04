@@ -13,6 +13,9 @@ pub struct TestStep {
     pub action: String,
     pub params: HashMap<String, serde_json::Value>,
     pub reasoning: String,
+    /// Raw screenshot bytes (not serialized to YAML).
+    #[serde(skip)]
+    pub screenshot: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +65,20 @@ pub fn export(tc: &TestCase) -> Result<PathBuf> {
     let filename = format!("{}-{}.yaml", slug, now);
     let path = results_dir.join(&filename);
 
+    // Create screenshots directory if needed
+    if tc.screenshots {
+        let screenshots_dir = results_dir.join("screenshots").join(format!("{}-{}", slug, now));
+        std::fs::create_dir_all(&screenshots_dir).context("Failed to create screenshots directory")?;
+
+        for (i, step) in tc.steps.iter().enumerate() {
+            if let Some(data) = &step.screenshot {
+                let screenshot_name = format!("step_{:02}_{}.png", i + 1, slugify(&step.action));
+                let screenshot_path = screenshots_dir.join(screenshot_name);
+                std::fs::write(&screenshot_path, data).with_context(|| format!("Failed to write screenshot to {:?}", screenshot_path))?;
+            }
+        }
+    }
+
     let yaml = serde_yaml::to_string(tc).context("Failed to serialize TestCase to YAML")?;
     std::fs::write(&path, yaml).with_context(|| format!("Failed to write YAML to {:?}", path))?;
 
@@ -98,11 +115,13 @@ mod tests {
                     action: "tap".to_string(),
                     params,
                     reasoning: "Tapping the Settings icon".to_string(),
+                    screenshot: None,
                 },
                 TestStep {
                     action: "screenshot".to_string(),
                     params: HashMap::new(),
                     reasoning: "Capture after tap".to_string(),
+                    screenshot: None,
                 },
             ],
             success: true,
