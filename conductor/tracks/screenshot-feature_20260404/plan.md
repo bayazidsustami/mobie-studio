@@ -8,7 +8,7 @@
 ## Overview
 This track implements automated and manual screenshot capture for Android devices via ADB, integrated into the Mobie Studio test execution loop. It includes a global toggle, sequential naming, and relative storage logic.
 
-## Phase 1: Device Bridge & ADB Integration
+## Phase 1: Device Bridge & ADB Integration [checkpoint: 5f70006]
 
 Expand the `DeviceBridge` to support frame buffer capture via ADB.
 
@@ -16,7 +16,7 @@ Expand the `DeviceBridge` to support frame buffer capture via ADB.
 - [x] Task 1.1: Implement `screencap` in `DeviceBridge`. Create a new method in `src/device/mod.rs` to execute `adb exec-out screencap -p`. fa6f3e0
 - [x] Task 1.2: Implement error handling for failed ADB commands and ensure the returned image data is correctly captured as a byte buffer. fa6f3e0
 - [x] Task 1.3: Write unit tests in `tests/device_bridge_tests.rs` using a mock ADB runner to verify the command execution and byte handling. fa6f3e0
-- [ ] Task 1.4: Conductor - User Manual Verification 'Phase 1: Device Bridge & ADB Integration' (Protocol in workflow.md)
+- [x] Task 1.4: Conductor - User Manual Verification 'Phase 1: Device Bridge & ADB Integration' (Protocol in workflow.md) 5f70006
 
 ## Phase 2: Agent Action & Command Support
 
