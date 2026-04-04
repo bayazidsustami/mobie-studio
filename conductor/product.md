@@ -15,6 +15,7 @@ Mobie Studio empowers mobile-first QA, Engineers, and non-technical staff to run
 - **Zero-Effort Setup:** Eliminates the deep learning curve and configuration hell of traditional mobile testing frameworks. 
 - **Conversational Interface:** Users dictate test goals in plain English.
 - **Autonomous Agent Loop:** The agent uses a tool-driven loop powered by the rig-core framework, incorporating multi-step planning and session memory to handle dynamic UIs like a human would.
+- **Visual Documentation:** Automated screenshot capture provides a visual "proof of work" for every step, aiding in audit trails and manual verification.
 - **Integrated Emulator Management:** View all registered Android Virtual Devices (AVDs) and launch or stop them directly within the app, streamlining the testing workflow.
 - **Deterministic Replay & CI/CD Output:** Successful exploratory AI runs generate strict, step-by-step YAML test cases. Users can immediately "retest" these scenarios in the UI, ensuring fast, deterministic replay without incurring LLM latency before committing them to CI/CD pipelines.
 

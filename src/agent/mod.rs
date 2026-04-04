@@ -20,8 +20,8 @@ pub enum AgentStatus {
 /// Messages the UI sends **to** the Agent Engine.
 #[derive(Debug, Clone)]
 pub enum AgentMessage {
-    /// Start a new goal (exploratory run).
-    StartGoal(String),
+    /// Start a new goal (exploratory run) with optional screenshot toggle.
+    StartGoal(String, bool),
     /// Cancel the current goal.
     Stop,
     /// Update LLM configuration (API key, model, etc.) at runtime.
@@ -166,19 +166,20 @@ impl AgentEngine {
                         .await;
                 }
 
-                AgentMessage::StartGoal(goal) => {
-                    info!("Received goal: {}", goal);
+                AgentMessage::StartGoal(goal, screenshots) => {
+                    info!("Received goal: {} (screenshots: {})", goal, screenshots);
                     let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
-                            "🎯 Starting: \"{}\"",
-                            goal
+                            "🎯 Starting: \"{}\" (📸 {})",
+                            goal,
+                            if screenshots { "Enabled" } else { "Disabled" }
                         )))
                         .await;
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                         .await;
 
-                    match rig_agent.think(&goal).await {
+                    match rig_agent.think(&goal, screenshots).await {
                         Ok(res) => {
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
@@ -189,6 +190,7 @@ impl AgentEngine {
                                 if !h.is_empty() {
                                     let tc = crate::yaml_exporter::TestCase {
                                         goal: goal.clone(),
+                                        screenshots,
                                         steps: h.clone(),
                                         success: true,
                                     };
@@ -224,6 +226,7 @@ impl AgentEngine {
 
                     if let Ok(yaml) = std::fs::read_to_string(&path) {
                         if let Ok(tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
+                            let mut retest_steps = Vec::new();
                             for step in tc.steps {
                                 let _ = update_tx.send(AgentUpdate::AgentReply(format!("⚡ {} - {}", step.action, step.reasoning))).await;
                                 match step.action.as_str() {
@@ -254,10 +257,34 @@ impl AgentEngine {
                                         let code = step.params.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                         let _ = device.keyevent(code).await;
                                     }
+                                    "screenshot" => {
+                                        let _ = device.screenshot().await;
+                                    }
                                     _ => {}
                                 }
+
+                                let mut retest_step = step.clone();
+                                if tc.screenshots && step.action != "screenshot" && step.action != "observe" {
+                                    retest_step.screenshot = device.screenshot().await.ok();
+                                } else if step.action == "screenshot" {
+                                    retest_step.screenshot = device.screenshot().await.ok();
+                                }
+                                retest_steps.push(retest_step);
+
                                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                             }
+
+                            // Export retest results if screenshots were taken
+                            if tc.screenshots {
+                                let retest_tc = crate::yaml_exporter::TestCase {
+                                    goal: format!("Retest: {}", tc.goal),
+                                    screenshots: true,
+                                    steps: retest_steps,
+                                    success: true,
+                                };
+                                let _ = crate::yaml_exporter::export(&retest_tc);
+                            }
+
                             let _ = update_tx.send(AgentUpdate::AgentReply("✅ Replay complete.".to_string())).await;
                         } else {
                             let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to parse test case.".to_string())).await;

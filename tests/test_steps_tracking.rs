@@ -30,7 +30,8 @@ async fn test_tap_tool_records_history() {
 
     let tap_tool = Tap {
         device,
-        history: history.clone(), // This field will cause a compile error initially
+        history: history.clone(),
+        screenshots: false,
     };
 
     let args = TapArgs {

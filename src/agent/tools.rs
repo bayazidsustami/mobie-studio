@@ -27,6 +27,7 @@ pub struct TapArgs {
 pub struct Tap {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Tap {
@@ -58,6 +59,11 @@ impl Tool for Tap {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
         
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("x".to_string(), json!(args.x));
         params.insert("y".to_string(), json!(args.y));
@@ -66,6 +72,7 @@ impl Tool for Tap {
                 action: "tap".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
         }
 
@@ -89,6 +96,7 @@ pub struct InputArgs {
 pub struct Input {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Input {
@@ -120,6 +128,11 @@ impl Tool for Input {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
             
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("text".to_string(), json!(args.text));
         if let Ok(mut h) = self.history.lock() {
@@ -127,6 +140,7 @@ impl Tool for Input {
                 action: "input".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
         }
 
@@ -153,6 +167,7 @@ pub struct SwipeArgs {
 pub struct Swipe {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Swipe {
@@ -206,6 +221,11 @@ impl Tool for Swipe {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
 
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("direction".to_string(), json!(args.direction));
         params.insert("x".to_string(), json!(args.x));
@@ -218,6 +238,7 @@ impl Tool for Swipe {
                 action: "swipe".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
         }
 
@@ -241,6 +262,7 @@ pub struct KeyEventArgs {
 pub struct KeyEvent {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for KeyEvent {
@@ -272,6 +294,11 @@ impl Tool for KeyEvent {
             .await
             .map_err(|e| ToolError(e.to_string()))?;
             
+        let mut screenshot = None;
+        if self.screenshots {
+            screenshot = self.device.screenshot().await.ok();
+        }
+
         let mut params = HashMap::new();
         params.insert("code".to_string(), json!(args.code));
         if let Ok(mut h) = self.history.lock() {
@@ -279,12 +306,71 @@ impl Tool for KeyEvent {
                 action: "key_event".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot,
             });
         }
 
         Ok(format!(
             "KeyEvent {} performed for: {}",
             args.code, args.reasoning
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot Tool
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ScreenshotArgs {
+    pub reasoning: String,
+}
+
+pub struct Screenshot {
+    pub device: Arc<DeviceBridge>,
+    pub history: Arc<Mutex<Vec<TestStep>>>,
+}
+
+impl Tool for Screenshot {
+    const NAME: &'static str = "screenshot";
+
+    type Error = ToolError;
+    type Args = ScreenshotArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Capture a screenshot of the current screen on the mobile device.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "reasoning": { "type": "string", "description": "Why this screenshot is being captured" }
+                },
+                "required": ["reasoning"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let screenshot = self.device
+            .screenshot()
+            .await
+            .map_err(|e| ToolError(e.to_string()))?;
+        
+        let params = HashMap::new();
+        if let Ok(mut h) = self.history.lock() {
+            h.push(TestStep {
+                action: "screenshot".to_string(),
+                params,
+                reasoning: args.reasoning.clone(),
+                screenshot: Some(screenshot),
+            });
+        }
+
+        Ok(format!(
+            "Screenshot captured for: {}",
+            args.reasoning
         ))
     }
 }
@@ -339,6 +425,7 @@ impl Tool for Observe {
                 action: "observe".to_string(),
                 params,
                 reasoning: args.reasoning.clone(),
+                screenshot: None,
             });
         }
 
@@ -361,6 +448,6 @@ mod tests {
     async fn test_tap_tool_exists() {
         let device = Arc::new(DeviceBridge::new());
         let history = Arc::new(Mutex::new(Vec::<TestStep>::new()));
-        let _tool = Tap { device, history };
+        let _tool = Tap { device, history, screenshots: false };
     }
 }

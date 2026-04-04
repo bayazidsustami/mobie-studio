@@ -1,4 +1,4 @@
-use crate::agent::tools::{Input, KeyEvent, Observe, Swipe, Tap};
+use crate::agent::tools::{Input, KeyEvent, Observe, Screenshot, Swipe, Tap};
 use crate::device::DeviceBridge;
 use crate::llm::LlmConfig;
 use crate::yaml_exporter::TestStep;
@@ -23,7 +23,7 @@ impl RigAgent {
         }
     }
 
-    fn build_client(&self) -> Result<openai::CompletionsClient<reqwest::Client>, anyhow::Error> {
+    fn build_client(&self) -> Result<openai::Client<reqwest::Client>, anyhow::Error> {
         let api_key = if self.config.api_key.is_empty() {
             "sk-dummy".to_string()
         } else {
@@ -48,11 +48,10 @@ impl RigAgent {
             .api_key(&api_key)
             .base_url(&self.config.base_url)
             .http_client(http_client)
-            .build()?
-            .completions_api())
+            .build()?)
     }
 
-    pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
+    pub async fn think(&self, goal: &str, screenshots: bool) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
 
         // Clear history before starting a new session/goal
@@ -62,11 +61,12 @@ impl RigAgent {
 
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
-            .tool(Tap { device: self.device.clone(), history: self.history.clone() })
-            .tool(Input { device: self.device.clone(), history: self.history.clone() })
-            .tool(Swipe { device: self.device.clone(), history: self.history.clone() })
-            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone() })
+            .tool(Tap { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Input { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Swipe { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone(), screenshots })
             .tool(Observe { device: self.device.clone(), history: self.history.clone() })
+            .tool(Screenshot { device: self.device.clone(), history: self.history.clone() })
             .build();
 
         // Use max_turns to allow the agent to iterate
