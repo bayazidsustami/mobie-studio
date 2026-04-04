@@ -18,5 +18,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [x] **Track: Screenshot Feature**
-*Link: [./tracks/screenshot-feature_20260404/](./tracks/screenshot-feature_20260404/)*
+## [ ] Track: Next Feature
+*Placeholder for next track*
