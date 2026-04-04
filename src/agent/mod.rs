@@ -189,6 +189,7 @@ impl AgentEngine {
                                 if !h.is_empty() {
                                     let tc = crate::yaml_exporter::TestCase {
                                         goal: goal.clone(),
+                                        screenshots: false,
                                         steps: h.clone(),
                                         success: true,
                                     };
@@ -253,6 +254,9 @@ impl AgentEngine {
                                     "key_event" => {
                                         let code = step.params.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                         let _ = device.keyevent(code).await;
+                                    }
+                                    "screenshot" => {
+                                        let _ = device.screenshot().await;
                                     }
                                     _ => {}
                                 }

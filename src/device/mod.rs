@@ -325,6 +325,9 @@ impl DeviceBridge {
                 self.swipe(*x, *y, x2, y2, 300).await
             }
             Action::KeyEvent { code, .. } => self.keyevent(*code).await,
+            Action::Screenshot { .. } => {
+                self.screenshot().await.map(|_| ())
+            }
             Action::Done { .. } => {
                 // Nothing to execute; the agent loop handles termination.
                 Ok(())

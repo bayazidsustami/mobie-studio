@@ -23,9 +23,9 @@ Expand the `DeviceBridge` to support frame buffer capture via ADB.
 Integrate the screenshot capability into the Agent's toolset and the YAML test format.
 
 ### Tasks
-- [ ] Task 2.1: Add `Screenshot` action to the Agent. Update `src/agent/action.rs` to include a `Screenshot` variant and implement the corresponding tool in `src/agent/tools.rs` calling the `DeviceBridge`.
-- [ ] Task 2.2: Update YAML Exporter and Parser in `src/yaml_exporter.rs` and relevant parsing logic to support the new `screenshot` command in test cases.
-- [ ] Task 2.3: Write unit tests to verify the `Screenshot` tool execution and YAML serialization/deserialization of the new command.
+- [x] Task 2.1: Add `Screenshot` action to the Agent. Update `src/agent/action.rs` to include a `Screenshot` variant and implement the corresponding tool in `src/agent/tools.rs` calling the `DeviceBridge`. d72b0e9
+- [x] Task 2.2: Update YAML Exporter and Parser in `src/yaml_exporter.rs` and relevant parsing logic to support the new `screenshot` command in test cases. d72b0e9
+- [x] Task 2.3: Write unit tests to verify the `Screenshot` tool execution and YAML serialization/deserialization of the new command. d72b0e9
 - [ ] Task 2.4: Conductor - User Manual Verification 'Phase 2: Agent Action & Command Support' (Protocol in workflow.md)
 
 ## Phase 3: Automated Capture & Global Configuration

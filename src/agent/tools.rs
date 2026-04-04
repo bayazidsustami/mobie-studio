@@ -290,6 +290,63 @@ impl Tool for KeyEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Screenshot Tool
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ScreenshotArgs {
+    pub reasoning: String,
+}
+
+pub struct Screenshot {
+    pub device: Arc<DeviceBridge>,
+    pub history: Arc<Mutex<Vec<TestStep>>>,
+}
+
+impl Tool for Screenshot {
+    const NAME: &'static str = "screenshot";
+
+    type Error = ToolError;
+    type Args = ScreenshotArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Capture a screenshot of the current screen on the mobile device.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "reasoning": { "type": "string", "description": "Why this screenshot is being captured" }
+                },
+                "required": ["reasoning"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.device
+            .screenshot()
+            .await
+            .map_err(|e| ToolError(e.to_string()))?;
+        
+        let params = HashMap::new();
+        if let Ok(mut h) = self.history.lock() {
+            h.push(TestStep {
+                action: "screenshot".to_string(),
+                params,
+                reasoning: args.reasoning.clone(),
+            });
+        }
+
+        Ok(format!(
+            "Screenshot captured for: {}",
+            args.reasoning
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Observe Tool
 // ---------------------------------------------------------------------------
 

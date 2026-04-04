@@ -1,4 +1,4 @@
-use crate::agent::tools::{Input, KeyEvent, Observe, Swipe, Tap};
+use crate::agent::tools::{Input, KeyEvent, Observe, Screenshot, Swipe, Tap};
 use crate::device::DeviceBridge;
 use crate::llm::LlmConfig;
 use crate::yaml_exporter::TestStep;
@@ -23,7 +23,7 @@ impl RigAgent {
         }
     }
 
-    fn build_client(&self) -> Result<openai::CompletionsClient<reqwest::Client>, anyhow::Error> {
+    fn build_client(&self) -> Result<openai::Client<reqwest::Client>, anyhow::Error> {
         let api_key = if self.config.api_key.is_empty() {
             "sk-dummy".to_string()
         } else {
@@ -48,8 +48,7 @@ impl RigAgent {
             .api_key(&api_key)
             .base_url(&self.config.base_url)
             .http_client(http_client)
-            .build()?
-            .completions_api())
+            .build()?)
     }
 
     pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
@@ -67,6 +66,7 @@ impl RigAgent {
             .tool(Swipe { device: self.device.clone(), history: self.history.clone() })
             .tool(KeyEvent { device: self.device.clone(), history: self.history.clone() })
             .tool(Observe { device: self.device.clone(), history: self.history.clone() })
+            .tool(Screenshot { device: self.device.clone(), history: self.history.clone() })
             .build();
 
         // Use max_turns to allow the agent to iterate

@@ -18,6 +18,8 @@ pub struct TestStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestCase {
     pub goal: String,
+    #[serde(default)]
+    pub screenshots: bool,
     pub steps: Vec<TestStep>,
     pub success: bool,
 }
@@ -90,19 +92,29 @@ mod tests {
 
         let tc = TestCase {
             goal: "Open Settings".to_string(),
-            steps: vec![TestStep {
-                action: "tap".to_string(),
-                params,
-                reasoning: "Tapping the Settings icon".to_string(),
-            }],
+            screenshots: true,
+            steps: vec![
+                TestStep {
+                    action: "tap".to_string(),
+                    params,
+                    reasoning: "Tapping the Settings icon".to_string(),
+                },
+                TestStep {
+                    action: "screenshot".to_string(),
+                    params: HashMap::new(),
+                    reasoning: "Capture after tap".to_string(),
+                },
+            ],
             success: true,
         };
 
         let yaml = serde_yaml::to_string(&tc).expect("serialize");
         let loaded: TestCase = serde_yaml::from_str(&yaml).expect("deserialize");
         assert_eq!(loaded.goal, "Open Settings");
+        assert!(loaded.screenshots);
         assert!(loaded.success);
-        assert_eq!(loaded.steps.len(), 1);
+        assert_eq!(loaded.steps.len(), 2);
         assert_eq!(loaded.steps[0].action, "tap");
+        assert_eq!(loaded.steps[1].action, "screenshot");
     }
 }

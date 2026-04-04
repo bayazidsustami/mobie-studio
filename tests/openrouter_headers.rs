@@ -9,7 +9,7 @@ async fn test_openrouter_headers_presence() {
     let url = server.url();
 
     let mock = server
-        .mock("POST", "/chat/completions")
+        .mock("POST", "/responses")
         .match_header("HTTP-Referer", "https://mobie.studio")
         .match_header("X-Title", "Mobie Studio")
         .with_status(200)
