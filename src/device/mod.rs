@@ -143,6 +143,25 @@ impl DeviceBridge {
         Ok(devices)
     }
 
+    /// Captures a screenshot from the device via adb exec-out screencap -p
+    pub async fn screenshot(&self) -> Result<Vec<u8>> {
+        info!("Capturing screenshot via adb exec-out screencap -p...");
+        let mut args = self.adb_base_args();
+        args.extend(["exec-out".to_string(), "screencap".to_string(), "-p".to_string()]);
+
+        let output = self
+            .run_command_timeout("adb".to_string(), args, std::time::Duration::from_secs(10))
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("screencap failed: {}", stderr);
+            return Err(anyhow::anyhow!("screencap failed: {}", stderr));
+        }
+
+        Ok(output.stdout)
+    }
+
     /// Dumps the current UI hierarchy to XML via uiautomator
     pub async fn observe_ui(&self) -> Result<String> {
         info!("Dumping UI via adb shell uiautomator...");
