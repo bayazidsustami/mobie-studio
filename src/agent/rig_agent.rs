@@ -51,7 +51,7 @@ impl RigAgent {
             .build()?)
     }
 
-    pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
+    pub async fn think(&self, goal: &str, screenshots: bool) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
 
         // Clear history before starting a new session/goal
@@ -61,10 +61,10 @@ impl RigAgent {
 
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
-            .tool(Tap { device: self.device.clone(), history: self.history.clone() })
-            .tool(Input { device: self.device.clone(), history: self.history.clone() })
-            .tool(Swipe { device: self.device.clone(), history: self.history.clone() })
-            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone() })
+            .tool(Tap { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Input { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Swipe { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone(), screenshots })
             .tool(Observe { device: self.device.clone(), history: self.history.clone() })
             .tool(Screenshot { device: self.device.clone(), history: self.history.clone() })
             .build();

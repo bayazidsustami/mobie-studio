@@ -20,8 +20,8 @@ pub enum AgentStatus {
 /// Messages the UI sends **to** the Agent Engine.
 #[derive(Debug, Clone)]
 pub enum AgentMessage {
-    /// Start a new goal (exploratory run).
-    StartGoal(String),
+    /// Start a new goal (exploratory run) with optional screenshot toggle.
+    StartGoal(String, bool),
     /// Cancel the current goal.
     Stop,
     /// Update LLM configuration (API key, model, etc.) at runtime.
@@ -166,19 +166,20 @@ impl AgentEngine {
                         .await;
                 }
 
-                AgentMessage::StartGoal(goal) => {
-                    info!("Received goal: {}", goal);
+                AgentMessage::StartGoal(goal, screenshots) => {
+                    info!("Received goal: {} (screenshots: {})", goal, screenshots);
                     let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
-                            "🎯 Starting: \"{}\"",
-                            goal
+                            "🎯 Starting: \"{}\" (📸 {})",
+                            goal,
+                            if screenshots { "Enabled" } else { "Disabled" }
                         )))
                         .await;
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                         .await;
 
-                    match rig_agent.think(&goal).await {
+                    match rig_agent.think(&goal, screenshots).await {
                         Ok(res) => {
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
@@ -189,7 +190,7 @@ impl AgentEngine {
                                 if !h.is_empty() {
                                     let tc = crate::yaml_exporter::TestCase {
                                         goal: goal.clone(),
-                                        screenshots: false,
+                                        screenshots,
                                         steps: h.clone(),
                                         success: true,
                                     };
@@ -260,6 +261,11 @@ impl AgentEngine {
                                     }
                                     _ => {}
                                 }
+
+                                if tc.screenshots && step.action != "screenshot" && step.action != "observe" {
+                                    let _ = device.screenshot().await;
+                                }
+
                                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                             }
                             let _ = update_tx.send(AgentUpdate::AgentReply("✅ Replay complete.".to_string())).await;

@@ -33,9 +33,9 @@ Integrate the screenshot capability into the Agent's toolset and the YAML test f
 Implement the global toggle and automated post-action capture logic.
 
 ### Tasks
-- [ ] Task 3.1: Implement Global Screenshot Toggle. Update the YAML test case header to support `screenshots: true/false` and ensure this preference is accessible to the Agent Engine.
-- [ ] Task 3.2: Implement Automated Post-Action Capture. Modify the Agent execution loop in `src/agent/rig_agent.rs` to trigger a screenshot after each successful action if the global toggle is enabled.
-- [ ] Task 3.3: Write integration tests to verify that screenshots are automatically triggered (or skipped) based on the global toggle.
+- [x] Task 3.1: Implement Global Screenshot Toggle. Update the YAML test case header to support `screenshots: true/false` and ensure this preference is accessible to the Agent Engine. 7d8f92a
+- [x] Task 3.2: Implement Automated Post-Action Capture. Modify the Agent execution loop in `src/agent/rig_agent.rs` to trigger a screenshot after each successful action if the global toggle is enabled. 7d8f92a
+- [x] Task 3.3: Write integration tests to verify that screenshots are automatically triggered (or skipped) based on the global toggle. 7d8f92a
 - [ ] Task 3.4: Conductor - User Manual Verification 'Phase 3: Automated Capture & Global Configuration' (Protocol in workflow.md)
 
 ## Phase 4: Storage & Naming Convention

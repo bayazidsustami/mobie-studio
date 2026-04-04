@@ -27,6 +27,7 @@ pub struct TapArgs {
 pub struct Tap {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Tap {
@@ -69,6 +70,10 @@ impl Tool for Tap {
             });
         }
 
+        if self.screenshots {
+            let _ = self.device.screenshot().await;
+        }
+
         Ok(format!(
             "Tap performed at ({}, {}) for: {}",
             args.x, args.y, args.reasoning
@@ -89,6 +94,7 @@ pub struct InputArgs {
 pub struct Input {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Input {
@@ -130,6 +136,10 @@ impl Tool for Input {
             });
         }
 
+        if self.screenshots {
+            let _ = self.device.screenshot().await;
+        }
+
         Ok(format!(
             "Input \"{}\" performed for: {}",
             args.text, args.reasoning
@@ -153,6 +163,7 @@ pub struct SwipeArgs {
 pub struct Swipe {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Swipe {
@@ -221,6 +232,10 @@ impl Tool for Swipe {
             });
         }
 
+        if self.screenshots {
+            let _ = self.device.screenshot().await;
+        }
+
         Ok(format!(
             "Swipe {} from ({}, {}) performed for: {}",
             args.direction, args.x, args.y, args.reasoning
@@ -241,6 +256,7 @@ pub struct KeyEventArgs {
 pub struct KeyEvent {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for KeyEvent {
@@ -280,6 +296,10 @@ impl Tool for KeyEvent {
                 params,
                 reasoning: args.reasoning.clone(),
             });
+        }
+
+        if self.screenshots {
+            let _ = self.device.screenshot().await;
         }
 
         Ok(format!(
@@ -418,6 +438,6 @@ mod tests {
     async fn test_tap_tool_exists() {
         let device = Arc::new(DeviceBridge::new());
         let history = Arc::new(Mutex::new(Vec::<TestStep>::new()));
-        let _tool = Tap { device, history };
+        let _tool = Tap { device, history, screenshots: false };
     }
 }

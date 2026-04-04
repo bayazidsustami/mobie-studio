@@ -1091,7 +1091,7 @@ impl MobieWorkspace {
         } else {
             let tx = self.cmd_tx.clone();
             cx.spawn(async move |_, _| {
-                let _ = tx.send(AgentMessage::StartGoal(text)).await;
+                let _ = tx.send(AgentMessage::StartGoal(text, true)).await;
             })
             .detach();
         }
