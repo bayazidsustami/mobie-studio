@@ -18,5 +18,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [~] Track: Screenshot Feature
+- [x] **Track: Screenshot Feature**
 *Link: [./tracks/screenshot-feature_20260404/](./tracks/screenshot-feature_20260404/)*
