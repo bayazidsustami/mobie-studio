@@ -32,7 +32,7 @@ pub struct TestCase {
 // ---------------------------------------------------------------------------
 
 /// Slugify a string for use as a filename component.
-fn slugify(s: &str) -> String {
+pub fn slugify(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_alphanumeric() {

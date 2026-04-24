@@ -949,6 +949,11 @@ pub struct MobieWorkspace {
     // History
     sessions: Vec<crate::db::Session>,
     selected_session: Option<crate::db::Session>,
+    selected_test_case: Option<crate::yaml_exporter::TestCase>,
+    
+    // Image Preview
+    preview_image_path: Option<String>,
+    preview_zoom: f32,
 
     // Inputs
     chat_input: Entity<TextInput>,
@@ -1064,6 +1069,9 @@ impl MobieWorkspace {
             latest_test: None,
             sessions,
             selected_session: None,
+            selected_test_case: None,
+            preview_image_path: None,
+            preview_zoom: 1.0,
             chat_input,
             settings_api_key,
             settings_model,
@@ -1294,6 +1302,30 @@ impl MobieWorkspace {
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
                                             this.selected_session = Some(session_clone.clone());
+                                            this.selected_test_case = None;
+                                            
+                                            if let Some(yaml_path) = &session_clone.yaml_path {
+                                                if let Ok(yaml) = std::fs::read_to_string(yaml_path) {
+                                                    if let Ok(mut tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
+                                                        // Load screenshots from disk if they exist
+                                                        let p = std::path::PathBuf::from(yaml_path);
+                                                        if let Some(stem) = p.file_stem() {
+                                                            if let Some(parent) = p.parent() {
+                                                                let screenshots_dir = parent.join("screenshots").join(stem);
+                                                                for (i, step) in tc.steps.iter_mut().enumerate() {
+                                                                    let name = format!("step_{:02}_{}.png", i + 1, crate::yaml_exporter::slugify(&step.action));
+                                                                    let screenshot_path = screenshots_dir.join(name);
+                                                                    if screenshot_path.exists() {
+                                                                        step.screenshot = std::fs::read(screenshot_path).ok();
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        this.selected_test_case = Some(tc);
+                                                    }
+                                                }
+                                            }
+                                            
                                             this.current_view = AppView::History;
                                             cx.notify();
                                         }),
@@ -1757,14 +1789,14 @@ impl MobieWorkspace {
     // History view
     // -----------------------------------------------------------------------
 
-    fn render_history_panel(&self, _cx: &mut Context<Self>) -> Div {
+    fn render_history_panel(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex_1()
             .min_w_0() // Allow container to shrink
             .h_full()
             .bg(rgb(0x0a0a1a))
             .child(match &self.selected_session {
-                Some(session) => self.render_session_detail(session),
+                Some(session) => self.render_session_detail(session, cx),
                 None => div()
                     .size_full()
                     .flex()
@@ -1778,7 +1810,7 @@ impl MobieWorkspace {
             })
     }
 
-    fn render_session_detail(&self, session: &crate::db::Session) -> Div {
+    fn render_session_detail(&self, session: &crate::db::Session, cx: &mut Context<Self>) -> Div {
         div()
             .size_full()
             .flex()
@@ -1864,9 +1896,144 @@ impl MobieWorkspace {
                                                 None => "No test case generated for this session.".to_string(),
                                             })
                                     )
-                            ),
+                            )
+                            .when_some(self.selected_test_case.as_ref(), |this, tc| {
+                                this.child(
+                                    div()
+                                        .mt(px(20.0))
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0x888899))
+                                        .child("EXECUTION TIMELINE"),
+                                )
+                                .child(self.render_execution_timeline(tc, session.yaml_path.as_deref(), cx))
+                            }),
                     ),
             )
+    }
+
+    fn render_execution_timeline(&self, tc: &crate::yaml_exporter::TestCase, yaml_path: Option<&str>, cx: &mut Context<Self>) -> Div {
+        // Construct screenshots directory path if available
+        let screenshots_dir = yaml_path.and_then(|p| {
+            let p = std::path::PathBuf::from(p);
+            let stem = p.file_stem()?.to_string_lossy();
+            let parent = p.parent()?;
+            Some(parent.join("screenshots").join(stem.to_string()))
+        });
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .children(tc.steps.iter().enumerate().map(|(i, step)| {
+                let screenshot_path = screenshots_dir.as_ref().and_then(|dir| {
+                    let name = format!("step_{:02}_{}.png", i + 1, crate::yaml_exporter::slugify(&step.action));
+                    let path = dir.join(name);
+                    if path.exists() {
+                        Some(format!("file://{}", path.to_string_lossy()))
+                    } else {
+                        None
+                    }
+                });
+
+                div()
+                    .bg(rgb(0x16213e))
+                    .rounded(px(8.0))
+                    .p(px(12.0))
+                    .flex()
+                    .gap(px(16.0))
+                    .child(
+                        // Left: Step Metadata
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.0))
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .bg(rgb(0xe94560))
+                                            .text_color(rgb(0xffffff))
+                                            .text_xs()
+                                            .font_weight(FontWeight::BOLD)
+                                            .px(px(6.0))
+                                            .py(px(2.0))
+                                            .rounded(px(4.0))
+                                            .child(format!("{}", i + 1)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(0xeeeeff))
+                                            .child(step.action.to_uppercase()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x888899))
+                                    .child(format!("{:?}", step.params)),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(4.0))
+                                    .text_sm()
+                                    .italic()
+                                    .text_color(rgb(0xaaaabb))
+                                    .child(step.reasoning.clone()),
+                            ),
+                    )
+                    .when_some(screenshot_path, |this, path| {
+                        let preview_path = path.clone();
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .w(px(140.0))
+                                        .h(px(240.0))
+                                        .flex_shrink_0()
+                                        .bg(rgb(0x000000))
+                                        .rounded(px(6.0))
+                                        .overflow_hidden()
+                                        .child(
+                                            img(path)
+                                                .size_full()
+                                        )
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .bg(rgb(0xe94560))
+                                        .hover(|s| s.bg(rgb(0xff5c77)))
+                                        .text_color(rgb(0xffffff))
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .py(px(6.0))
+                                        .rounded(px(6.0))
+                                        .flex()
+                                        .justify_center()
+                                        .child("SEE FULL")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.preview_image_path = Some(preview_path.clone());
+                                                this.preview_zoom = 1.0;
+                                                cx.notify();
+                                            }),
+                                        )
+                                )
+                        )
+                    })
+            }))
     }
 
     fn render_detail_item(&self, label: &str, value: &str) -> Div {
@@ -1892,6 +2059,118 @@ impl MobieWorkspace {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .child(value.to_string()),
+            )
+    }
+
+    // -----------------------------------------------------------------------
+    // Image Preview Overlay
+    // -----------------------------------------------------------------------
+
+    fn render_image_preview(&self, cx: &mut Context<Self>) -> Div {
+        let path = match &self.preview_image_path {
+            Some(p) => p.clone(),
+            None => return div(),
+        };
+
+        div()
+            .absolute()
+            .size_full()
+            .bg(rgba(0x000000dd))
+            .flex()
+            .flex_col()
+            .child(
+                // Toolbar
+                div()
+                    .p(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .cursor_pointer()
+                                    .bg(rgb(0x2a2a4a))
+                                    .text_color(rgb(0xffffff))
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(6.0))
+                                    .child("Zoom -")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.preview_zoom = (this.preview_zoom - 0.2).max(0.2);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(0xaaaabb))
+                                    .child(format!("{:.0}%", self.preview_zoom * 100.0)),
+                            )
+                            .child(
+                                div()
+                                    .cursor_pointer()
+                                    .bg(rgb(0x2a2a4a))
+                                    .text_color(rgb(0xffffff))
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(6.0))
+                                    .child("Zoom +")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.preview_zoom = (this.preview_zoom + 0.2).min(5.0);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .bg(rgb(0xe94560))
+                            .text_color(rgb(0xffffff))
+                            .px(px(12.0))
+                            .py(px(6.0))
+                            .rounded(px(6.0))
+                            .font_weight(FontWeight::BOLD)
+                            .child("Close")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.preview_image_path = None;
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+            )
+            .child(
+                // Image Area
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .id("image-preview-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .overflow_x_scroll()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                img(path)
+                                    .w(px(600.0 * self.preview_zoom))
+                            )
+                    )
             )
     }
 
@@ -2095,6 +2374,9 @@ impl Render for MobieWorkspace {
                     .child(self.render_input_area(_window, cx)),
                 AppView::Settings => self.render_settings_panel(_window, cx),
                 AppView::History => self.render_history_panel(cx),
+            })
+            .when(self.preview_image_path.is_some(), |this| {
+                this.child(self.render_image_preview(cx))
             })
     }
 }
