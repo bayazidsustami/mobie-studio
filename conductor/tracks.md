@@ -18,5 +18,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [ ] Track: Next Feature
-*Placeholder for next track*
+- [x] **Track: Session History**
+*Link: [./tracks/session_history_20260424/](./tracks/session_history_20260424/)*
+
+- [x] **Track: Test Case Explorer**
+*Link: [./tracks/test_case_explorer_20260424/](./tracks/test_case_explorer_20260424/)*

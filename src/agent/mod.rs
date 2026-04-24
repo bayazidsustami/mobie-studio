@@ -47,6 +47,8 @@ pub enum AgentUpdate {
     DeviceList(Vec<(String, DeviceStatus)>),
     /// Emitted when a YAML test case is successfully generated.
     TestGenerated(std::path::PathBuf),
+    /// Emitted when a session is saved to the database.
+    SessionSaved,
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +76,9 @@ impl AgentEngine {
     ) {
         info!("Agent Engine loop started.");
         let mut device = DeviceBridge::new();
+        
+        let db_path = crate::config::db_path();
+        let session_manager = crate::db::SessionManager::new(db_path).ok();
 
         let mut config = LlmConfig {
             api_key: "".into(),
@@ -168,18 +173,23 @@ impl AgentEngine {
 
                 AgentMessage::StartGoal(goal, screenshots) => {
                     info!("Received goal: {} (screenshots: {})", goal, screenshots);
+                    let session_id = format!("sess_{}", chrono::Utc::now().timestamp());
+                    
                     let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
-                            "🎯 Starting: \"{}\" (📸 {})",
-                            goal,
-                            if screenshots { "Enabled" } else { "Disabled" }
+                            "🎯 Starting: \"{}\" (ID: {})",
+                            goal, session_id
                         )))
                         .await;
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                         .await;
 
-                    match rig_agent.think(&goal, screenshots).await {
+                    let result = rig_agent.think(&goal, screenshots).await;
+                    let mut yaml_path = None;
+                    let mut status = "success".to_string();
+
+                    match result {
                         Ok(res) => {
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
@@ -196,6 +206,7 @@ impl AgentEngine {
                                     };
                                     match crate::yaml_exporter::export(&tc) {
                                         Ok(path) => {
+                                            yaml_path = Some(path.to_string_lossy().to_string());
                                             let _ = update_tx.send(AgentUpdate::TestGenerated(path)).await;
                                         }
                                         Err(e) => {
@@ -207,6 +218,7 @@ impl AgentEngine {
                         }
                         Err(e) => {
                             error!("Agent failed: {}", e);
+                            status = format!("error: {}", e);
                             let _ = update_tx
                                 .send(AgentUpdate::StatusChanged(AgentStatus::Error(
                                     e.to_string(),
@@ -214,6 +226,24 @@ impl AgentEngine {
                                 .await;
                         }
                     }
+
+                    // Log to DB
+                    if let Some(ref mgr) = session_manager {
+                        let session = crate::db::Session {
+                            id: session_id,
+                            timestamp: chrono::Utc::now(),
+                            goal: goal.clone(),
+                            status,
+                            chat_log_path: None, // We could serialize history to a file if needed
+                            yaml_path,
+                        };
+                        if let Err(e) = mgr.insert_session(&session) {
+                            error!("Failed to log session to DB: {}", e);
+                        } else {
+                            let _ = update_tx.send(AgentUpdate::SessionSaved).await;
+                        }
+                    }
+
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
@@ -221,8 +251,12 @@ impl AgentEngine {
 
                 AgentMessage::RetestScenario(path) => {
                     info!("Retesting scenario from: {:?}", path);
+                    let session_id = format!("retest_{}", chrono::Utc::now().timestamp());
                     let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Acting)).await;
-                    let _ = update_tx.send(AgentUpdate::AgentReply(format!("🔄 Replaying test case: {:?}", path.file_name().unwrap_or_default()))).await;
+                    let _ = update_tx.send(AgentUpdate::AgentReply(format!("🔄 Replaying: {} (ID: {})", path.file_name().unwrap_or_default().to_string_lossy(), session_id))).await;
+
+                    let mut status = "success".to_string();
+                    let mut yaml_output_path = None;
 
                     if let Ok(yaml) = std::fs::read_to_string(&path) {
                         if let Ok(tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
@@ -282,15 +316,34 @@ impl AgentEngine {
                                     steps: retest_steps,
                                     success: true,
                                 };
-                                let _ = crate::yaml_exporter::export(&retest_tc);
+                                if let Ok(out_p) = crate::yaml_exporter::export(&retest_tc) {
+                                    yaml_output_path = Some(out_p.to_string_lossy().to_string());
+                                }
                             }
 
                             let _ = update_tx.send(AgentUpdate::AgentReply("✅ Replay complete.".to_string())).await;
                         } else {
+                            status = "error: Failed to parse test case".to_string();
                             let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to parse test case.".to_string())).await;
                         }
                     } else {
+                        status = "error: Failed to read test case file".to_string();
                         let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to read test case file.".to_string())).await;
+                    }
+
+                    // Log Retest to DB
+                    if let Some(ref mgr) = session_manager {
+                        let session = crate::db::Session {
+                            id: session_id,
+                            timestamp: chrono::Utc::now(),
+                            goal: format!("Retest: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                            status,
+                            chat_log_path: None,
+                            yaml_path: yaml_output_path,
+                        };
+                        if mgr.insert_session(&session).is_ok() {
+                            let _ = update_tx.send(AgentUpdate::SessionSaved).await;
+                        }
                     }
                     
                     let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Idle)).await;

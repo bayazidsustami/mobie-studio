@@ -20,6 +20,7 @@
 
 ## Data & Serialization
 - **Serialization Formats:** serde (JSON, YAML, TOML)
+- **Database:** SQLite (via `rusqlite`) for local persistence of session history
 
 ## Observability & Error Handling
 - **Logging:** tracing, tracing-subscriber
