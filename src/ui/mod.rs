@@ -925,12 +925,14 @@ impl EntityInputHandler for TextInput {
 enum AppView {
     Chat,
     Settings,
+    History,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 enum NavTabAction {
     Chat,
     Settings,
+    History,
 }
 
 pub struct MobieWorkspace {
@@ -943,6 +945,10 @@ pub struct MobieWorkspace {
     devices: Vec<(String, DeviceStatus)>,
     selected_device: Option<String>,
     latest_test: Option<std::path::PathBuf>,
+
+    // History
+    sessions: Vec<crate::db::Session>,
+    selected_session: Option<crate::db::Session>,
 
     // Inputs
     chat_input: Entity<TextInput>,
@@ -1001,6 +1007,14 @@ impl MobieWorkspace {
                                 });
                                 workspace.chat_scroll_handle.scroll_to_bottom();
                             }
+                            AgentUpdate::SessionSaved => {
+                                let db_path = crate::config::db_path();
+                                if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+                                    if let Ok(sessions) = mgr.get_all_sessions() {
+                                        workspace.sessions = sessions;
+                                    }
+                                }
+                            }
                         }
                         cx.notify();
                     })
@@ -1026,6 +1040,15 @@ impl MobieWorkspace {
             )
         });
 
+        // Load initial sessions
+        let mut sessions = vec![];
+        let db_path = crate::config::db_path();
+        if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+            if let Ok(s) = mgr.get_all_sessions() {
+                sessions = s;
+            }
+        }
+
         Self {
             focus_handle,
             chat_scroll_handle,
@@ -1039,6 +1062,8 @@ impl MobieWorkspace {
             devices: vec![],
             selected_device: None,
             latest_test: None,
+            sessions,
+            selected_session: None,
             chat_input,
             settings_api_key,
             settings_model,
@@ -1105,6 +1130,23 @@ impl MobieWorkspace {
             let _ = tx.send(AgentMessage::Stop).await;
         })
         .detach();
+        cx.notify();
+    }
+
+    fn navigate_history(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.current_view = AppView::History;
+        
+        // Fetch sessions from DB
+        let db_path = crate::config::db_path();
+        if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+            if let Ok(sessions) = mgr.get_all_sessions() {
+                self.sessions = sessions;
+            }
+        }
         cx.notify();
     }
 
@@ -1217,6 +1259,67 @@ impl MobieWorkspace {
                     _ => rgb(0x44ff88),
                 },
             ))
+            // Sessions Section
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x666688))
+                            .child("SESSIONS"),
+                    )
+                    .child(
+                        div()
+                            .id("sidebar-sessions")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .children(self.sessions.iter().map(|session| {
+                                let is_selected = self.selected_session.as_ref().map(|s| &s.id) == Some(&session.id);
+                                let session_clone = session.clone();
+                                
+                                div()
+                                    .p(px(8.0))
+                                    .mb(px(4.0))
+                                    .rounded(px(6.0))
+                                    .cursor_pointer()
+                                    .when(is_selected, |s| s.bg(rgba(0x4488cc22)))
+                                    .hover(|s| s.bg(rgba(0x4488cc11)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.selected_session = Some(session_clone.clone());
+                                            this.current_view = AppView::History;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0x888899))
+                                                    .child(session.timestamp.format("%m-%d %H:%M").to_string()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(if is_selected { rgb(0xeeeeff) } else { rgb(0xccccdd) })
+                                                    .overflow_hidden()
+                                                    .child(session.goal.clone()),
+                                            ),
+                                    )
+                            })),
+                    )
+            )
             // Cancel button (only visible when running)
             .when(is_running, |d| {
                 d.child(
@@ -1282,6 +1385,7 @@ impl MobieWorkspace {
                 cx.listener(move |this, _, window, cx| match action {
                     NavTabAction::Chat => this.navigate_chat(&NavigateChat, window, cx),
                     NavTabAction::Settings => this.navigate_settings(&NavigateSettings, window, cx),
+                    NavTabAction::History => this.navigate_history(window, cx),
                 }),
             )
             .child(label.to_string())
@@ -1650,6 +1754,148 @@ impl MobieWorkspace {
     }
 
     // -----------------------------------------------------------------------
+    // History view
+    // -----------------------------------------------------------------------
+
+    fn render_history_panel(&self, _cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_1()
+            .min_w_0() // Allow container to shrink
+            .h_full()
+            .bg(rgb(0x0a0a1a))
+            .child(match &self.selected_session {
+                Some(session) => self.render_session_detail(session),
+                None => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_color(rgb(0x555566))
+                            .child("Select a session from the sidebar to view details"),
+                    ),
+            })
+    }
+
+    fn render_session_detail(&self, session: &crate::db::Session) -> Div {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_w_0() // Allow container to shrink
+            .child(
+                div()
+                    .p(px(20.0))
+                    .border_b_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0x666688))
+                            .child(format!("SESSION ID: {}", session.id)),
+                    )
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xeeeeff))
+                            .overflow_hidden()
+                            .child(session.goal.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .id("session-detail-scroll")
+                    .flex_1()
+                    .p(px(20.0))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(16.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0x888899))
+                                    .child("METADATA"),
+                            )
+                            .child(
+                                div()
+                                    .bg(rgb(0x16213e))
+                                    .rounded(px(8.0))
+                                    .p(px(12.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.0))
+                                    .min_w_0()
+                                    .child(self.render_detail_item("Timestamp", &session.timestamp.to_rfc3339()))
+                                    .child(self.render_detail_item("Status", &session.status))
+                                    .child(self.render_detail_item("YAML Path", session.yaml_path.as_deref().unwrap_or("None"))),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(20.0))
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0x888899))
+                                    .child("RESULTS"),
+                            )
+                            .child(
+                                div()
+                                    .bg(rgb(0x16213e))
+                                    .rounded(px(8.0))
+                                    .p(px(12.0))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(0xccccdd))
+                                            .overflow_hidden()
+                                            .child(match &session.yaml_path {
+                                                Some(path) => format!("✅ Test case generated and saved to: {}", path),
+                                                None => "No test case generated for this session.".to_string(),
+                                            })
+                                    )
+                            ),
+                    ),
+            )
+    }
+
+    fn render_detail_item(&self, label: &str, value: &str) -> Div {
+        div()
+            .flex()
+            .gap(px(12.0))
+            .min_w_0()
+            .child(
+                div()
+                    .w(px(100.0))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x666688))
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(rgb(0xaaaabb))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(value.to_string()),
+            )
+    }
+
+    // -----------------------------------------------------------------------
     // Settings view
     // -----------------------------------------------------------------------
 
@@ -1848,6 +2094,7 @@ impl Render for MobieWorkspace {
                     .child(self.render_chat_area())
                     .child(self.render_input_area(_window, cx)),
                 AppView::Settings => self.render_settings_panel(_window, cx),
+                AppView::History => self.render_history_panel(cx),
             })
     }
 }

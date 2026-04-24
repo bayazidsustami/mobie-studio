@@ -40,6 +40,15 @@ fn config_path() -> PathBuf {
     dir.join("config.toml")
 }
 
+/// Path to the SQLite database for session history.
+pub fn db_path() -> PathBuf {
+    let dir = dirs::data_dir()
+        .or_else(|| dirs::config_dir())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("mobie");
+    dir.join("sessions.db")
+}
+
 /// Load config from `~/.config/mobie/config.toml`.
 /// Returns `AppConfig::default()` if the file is missing or unreadable.
 pub fn load_config() -> AppConfig {
