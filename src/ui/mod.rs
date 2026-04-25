@@ -1811,6 +1811,10 @@ impl MobieWorkspace {
     }
 
     fn render_session_detail(&self, session: &crate::db::Session, cx: &mut Context<Self>) -> Div {
+        let session_id = session.id.clone();
+        let yaml_path = session.yaml_path.clone();
+        let chat_log_path = session.chat_log_path.clone();
+
         div()
             .size_full()
             .flex()
@@ -1822,22 +1826,81 @@ impl MobieWorkspace {
                     .border_b_1()
                     .border_color(rgb(0x2a2a4a))
                     .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .min_w_0()
+                    .justify_between()
+                    .items_center()
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(rgb(0x666688))
-                            .child(format!("SESSION ID: {}", session.id)),
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x666688))
+                                    .child(format!("SESSION ID: {}", session.id)),
+                            )
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xeeeeff))
+                                    .overflow_hidden()
+                                    .child(session.goal.clone()),
+                            ),
                     )
                     .child(
                         div()
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0xeeeeff))
-                            .overflow_hidden()
-                            .child(session.goal.clone()),
+                            .p_2()
+                            .rounded(px(6.0))
+                            .bg(rgb(0x3a2a2a))
+                            .hover(|s| s.bg(rgb(0x5a2a2a)))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                let session_id = session_id.clone();
+                                let yaml_path = yaml_path.clone();
+                                let chat_log_path = chat_log_path.clone();
+
+                                // 1. Delete associated files
+                                if let Some(path_str) = &yaml_path {
+                                    let path = std::path::Path::new(path_str);
+                                    if path.exists() {
+                                        let _ = std::fs::remove_file(path);
+                                        // Delete screenshots directory: <yaml_dir>/screenshots/<yaml_stem>
+                                        if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) {
+                                            let screenshots_dir = parent.join("screenshots").join(stem);
+                                            if screenshots_dir.exists() {
+                                                let _ = std::fs::remove_dir_all(screenshots_dir);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(path_str) = &chat_log_path {
+                                    let path = std::path::Path::new(path_str);
+                                    if path.exists() {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                }
+
+                                // 2. Update DB and UI State
+                                let db_path = crate::config::db_path();
+                                if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+                                    let _ = mgr.delete_session(&session_id);
+                                }
+
+                                this.sessions.retain(|s| s.id != session_id);
+                                if this.selected_session.as_ref().map(|s| &s.id) == Some(&session_id) {
+                                    this.selected_session = None;
+                                }
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xff5555))
+                                    .child("Delete Session"),
+                            ),
                     ),
             )
             .child(
