@@ -1,7 +1,7 @@
 # Implementation Plan: Model Selection Dropdown
 
 ## Phase 1: API Integration for Models
-- [ ] Task: Define structs for the provider's `/models` API response.
+- [x] Task: Define structs for the provider's `/models` API response. f6a439e
 - [ ] Task: Implement an HTTP request to fetch models from the configured provider (e.g., OpenRouter) and cache them in the application state.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: API Integration for Models' (Protocol in workflow.md)
 
