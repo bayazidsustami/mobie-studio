@@ -978,19 +978,13 @@ impl MobieWorkspace {
         // Initial fetch of models
         let base_url = initial_config.llm.base_url.clone();
         let api_key = initial_config.llm.api_key.clone();
-        cx.spawn(async move |this, cx| {
-            if !api_key.is_empty() {
-                if let Ok(models) = crate::llm::fetch_models(&base_url, &api_key).await {
-                    let _ = cx.update(|cx| {
-                        this.update(cx, |workspace, cx| {
-                            workspace.available_models = models;
-                            cx.notify();
-                        })
-                    });
-                }
-            }
-        })
-        .detach();
+        if !api_key.is_empty() {
+            let tx = cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::FetchModels(base_url, api_key)).await;
+            })
+            .detach();
+        }
 
         // Spawn async task to forward agent updates into GPUI entity
         cx.spawn(async move |this, cx| {
@@ -1039,6 +1033,17 @@ impl MobieWorkspace {
                                         workspace.sessions = sessions;
                                     }
                                 }
+                            }
+                            AgentUpdate::ModelsFetched(models) => {
+                                workspace.available_models = models;
+                                workspace.fetching_models = false;
+                            }
+                            AgentUpdate::ModelsFetchFailed(e) => {
+                                workspace.fetching_models = false;
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!("⚠️ Failed to fetch models: {}", e),
+                                });
                             }
                         }
                         cx.notify();
@@ -1230,23 +1235,9 @@ impl MobieWorkspace {
         // Trigger re-fetch of models if credentials changed
         if !api_key.is_empty() {
             self.fetching_models = true;
-            cx.spawn(async move |this, cx| {
-                if let Ok(models) = crate::llm::fetch_models(&base_url, &api_key).await {
-                    let _ = cx.update(|cx| {
-                        this.update(cx, |workspace, cx| {
-                            workspace.available_models = models;
-                            workspace.fetching_models = false;
-                            cx.notify();
-                        })
-                    });
-                } else {
-                    let _ = cx.update(|cx| {
-                        this.update(cx, |workspace, cx| {
-                            workspace.fetching_models = false;
-                            cx.notify();
-                        })
-                    });
-                }
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::FetchModels(base_url, api_key)).await;
             })
             .detach();
         }

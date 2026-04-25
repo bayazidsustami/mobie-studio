@@ -36,6 +36,8 @@ pub enum AgentMessage {
     StopEmulator(String),
     /// Replay an existing YAML test case, bypassing LLM reasoning.
     RetestScenario(std::path::PathBuf),
+    /// Fetch available models from the provider.
+    FetchModels(String, String),
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -49,6 +51,10 @@ pub enum AgentUpdate {
     TestGenerated(std::path::PathBuf),
     /// Emitted when a session is saved to the database.
     SessionSaved,
+    /// Successfully fetched available models.
+    ModelsFetched(Vec<crate::llm::ModelData>),
+    /// Failed to fetch available models.
+    ModelsFetchFailed(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +353,21 @@ impl AgentEngine {
                     }
                     
                     let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Idle)).await;
+                }
+
+                AgentMessage::FetchModels(base_url, api_key) => {
+                    info!("Fetching models from {}...", base_url);
+                    let update_tx = update_tx.clone();
+                    tokio::spawn(async move {
+                        match crate::llm::fetch_models(&base_url, &api_key).await {
+                            Ok(models) => {
+                                let _ = update_tx.send(AgentUpdate::ModelsFetched(models)).await;
+                            }
+                            Err(e) => {
+                                let _ = update_tx.send(AgentUpdate::ModelsFetchFailed(e.to_string())).await;
+                            }
+                        }
+                    });
                 }
             }
         }
