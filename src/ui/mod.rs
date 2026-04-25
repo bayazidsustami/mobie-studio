@@ -2296,54 +2296,8 @@ impl MobieWorkspace {
             .flex_1()
             .h_full()
             .flex()
-            .flex_col()
-            // Header
-            .child(
-                div()
-                    .border_b_1()
-                    .border_color(rgb(0x2a2a4a))
-                    .p(px(16.0))
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xeeeeff))
-                            .child("⚙ LLM Settings (BYOK)"),
-                    ),
-            )
-            // Body
-            .child(
-                div()
-                    .flex_1()
-                    .p(px(24.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(20.0))
-                    .child(self.render_settings_field(
-                        "API Key",
-                        self.settings_api_key.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(self.render_model_selection(cx))
-                    .child(self.render_settings_field(
-                        "Base URL",
-                        self.settings_base_url.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .p(px(12.0))
-                            .bg(rgb(0x1a3a5c))
-                            .rounded(px(8.0))
-                            .text_xs()
-                            .text_color(rgb(0x8899bb))
-                            .child("💡 Click a field to focus and edit. Press Enter to save."),
-                    ),
-            )
-            // Save button
+            .flex_col_reverse()
+            // Save button (Footer)
             .child(
                 div()
                     .border_t_1()
@@ -2387,6 +2341,53 @@ impl MobieWorkspace {
                                 }),
                             )
                             .child("Cancel"),
+                    ),
+            )
+            // Body
+            .child(
+                div()
+                    .flex_1()
+                    .p(px(24.0))
+                    .flex()
+                    .flex_col_reverse()
+                    .gap(px(20.0))
+                    .child(div().flex_1()) // Spacer to push content to the top
+                    .child(
+                        div()
+                            .mt(px(8.0))
+                            .p(px(12.0))
+                            .bg(rgb(0x1a3a5c))
+                            .rounded(px(8.0))
+                            .text_xs()
+                            .text_color(rgb(0x8899bb))
+                            .child("💡 Click a field to focus and edit. Press Enter to save."),
+                    )
+                    .child(self.render_settings_field(
+                        "Base URL",
+                        self.settings_base_url.clone(),
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_model_selection(cx))
+                    .child(self.render_settings_field(
+                        "API Key",
+                        self.settings_api_key.clone(),
+                        window,
+                        cx,
+                    )),
+            )
+            // Header
+            .child(
+                div()
+                    .border_b_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .p(px(16.0))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xeeeeff))
+                            .child("⚙ LLM Settings (BYOK)"),
                     ),
             )
     }
@@ -2447,9 +2448,13 @@ impl MobieWorkspace {
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(rgb(0x666688))
-                                    .child(if fetching { "⌛" } else if is_open { "▴" } else { "▾" }),
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .ml_2()
+                                    .text_sm()
+                                    .text_color(rgb(0x888899))
+                                    .child(if fetching { "⌛" } else if is_open { "▲" } else { "▼" }),
                             ),
                     )
                     .when(is_open, |this| {
