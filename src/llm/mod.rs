@@ -10,6 +10,17 @@ pub struct LlmConfig {
     pub base_url: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ModelData {
+    pub id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ModelListResponse {
+    pub data: Vec<ModelData>,
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
