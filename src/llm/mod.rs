@@ -21,6 +21,10 @@ pub struct ModelListResponse {
     pub data: Vec<ModelData>,
 }
 
+use once_cell::sync::Lazy;
+
+static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+
 pub async fn fetch_models(base_url: &str, api_key: &str) -> anyhow::Result<Vec<ModelData>> {
     let url = if base_url.ends_with('/') {
         format!("{}models", base_url)
@@ -28,8 +32,7 @@ pub async fn fetch_models(base_url: &str, api_key: &str) -> anyhow::Result<Vec<M
         format!("{}/models", base_url)
     };
 
-    let client = reqwest::Client::new();
-    let response = client
+    let response = CLIENT
         .get(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .send()

@@ -2291,6 +2291,13 @@ impl MobieWorkspace {
     // Settings view
     // -----------------------------------------------------------------------
 
+    /// Renders the LLM configuration panel.
+    ///
+    /// NOTE: We use `flex_col_reverse` on the root container to control the painting order.
+    /// In GPUI, elements rendered later in the code are painted on top of earlier ones.
+    /// By using a reversed column and reversing the child order (Footer -> Body -> Header),
+    /// we ensure that the Body (which contains the model dropdown) is painted AFTER the Footer,
+    /// allowing the dropdown list to correctly overlay the bottom action buttons.
     fn render_settings_panel(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         div()
             .flex_1()
