@@ -3440,6 +3440,7 @@ dependencies = [
  "dirs 5.0.1",
  "gpui",
  "mockito",
+ "once_cell",
  "reqwest",
  "rig-core",
  "rusqlite",

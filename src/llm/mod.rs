@@ -10,6 +10,44 @@ pub struct LlmConfig {
     pub base_url: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ModelData {
+    pub id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ModelListResponse {
+    pub data: Vec<ModelData>,
+}
+
+use once_cell::sync::Lazy;
+
+static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+
+pub async fn fetch_models(base_url: &str, api_key: &str) -> anyhow::Result<Vec<ModelData>> {
+    let url = if base_url.ends_with('/') {
+        format!("{}models", base_url)
+    } else {
+        format!("{}/models", base_url)
+    };
+
+    let response = CLIENT
+        .get(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to fetch models: {} - {}", status, body);
+    }
+
+    let model_list: ModelListResponse = response.json().await?;
+    Ok(model_list.data)
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {

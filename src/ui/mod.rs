@@ -104,6 +104,13 @@ impl TextInput {
         &self.text
     }
 
+    pub fn set_text(&mut self, text: String, _cx: &mut Context<Self>) {
+        self.text = text;
+        self.cursor_offset = self.text.chars().count();
+        self.selection_anchor = None;
+        self.invalidate_cache();
+    }
+
     pub fn selection_range(&self) -> Option<Range<usize>> {
         let anchor = self.selection_anchor?;
         let start = anchor.min(self.cursor_offset);
@@ -960,6 +967,10 @@ pub struct MobieWorkspace {
     settings_api_key: Entity<TextInput>,
     settings_model: Entity<TextInput>,
     settings_base_url: Entity<TextInput>,
+
+    available_models: Vec<crate::llm::ModelData>,
+    fetching_models: bool,
+    model_dropdown_open: bool,
 }
 
 impl MobieWorkspace {
@@ -971,6 +982,17 @@ impl MobieWorkspace {
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let chat_scroll_handle = ScrollHandle::new();
+
+        // Initial fetch of models
+        let base_url = initial_config.llm.base_url.clone();
+        let api_key = initial_config.llm.api_key.clone();
+        if !api_key.is_empty() {
+            let tx = cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::FetchModels(base_url, api_key)).await;
+            })
+            .detach();
+        }
 
         // Spawn async task to forward agent updates into GPUI entity
         cx.spawn(async move |this, cx| {
@@ -1019,6 +1041,17 @@ impl MobieWorkspace {
                                         workspace.sessions = sessions;
                                     }
                                 }
+                            }
+                            AgentUpdate::ModelsFetched(models) => {
+                                workspace.available_models = models;
+                                workspace.fetching_models = false;
+                            }
+                            AgentUpdate::ModelsFetchFailed(e) => {
+                                workspace.fetching_models = false;
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!("⚠️ Failed to fetch models: {}", e),
+                                });
                             }
                         }
                         cx.notify();
@@ -1076,6 +1109,9 @@ impl MobieWorkspace {
             settings_api_key,
             settings_model,
             settings_base_url,
+            available_models: vec![],
+            fetching_models: false,
+            model_dropdown_open: false,
         }
     }
 
@@ -1194,12 +1230,26 @@ impl MobieWorkspace {
     }
 
     fn save_settings(&mut self, _: &SaveSettings, _window: &mut Window, cx: &mut Context<Self>) {
+        let api_key = self.settings_api_key.read(cx).text().to_string();
+        let base_url = self.settings_base_url.read(cx).text().to_string();
+        let model = self.settings_model.read(cx).text().to_string();
+
         let new_llm = LlmConfig {
-            api_key: self.settings_api_key.read(cx).text().to_string(),
-            model: self.settings_model.read(cx).text().to_string(),
-            base_url: self.settings_base_url.read(cx).text().to_string(),
+            api_key: api_key.clone(),
+            model,
+            base_url: base_url.clone(),
             provider: "openai".to_string(),
         };
+
+        // Trigger re-fetch of models if credentials changed
+        if !api_key.is_empty() {
+            self.fetching_models = true;
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::FetchModels(base_url, api_key)).await;
+            })
+            .detach();
+        }
 
         // Persist to disk
         let cfg = AppConfig {
@@ -2241,64 +2291,20 @@ impl MobieWorkspace {
     // Settings view
     // -----------------------------------------------------------------------
 
+    /// Renders the LLM configuration panel.
+    ///
+    /// NOTE: We use `flex_col_reverse` on the root container to control the painting order.
+    /// In GPUI, elements rendered later in the code are painted on top of earlier ones.
+    /// By using a reversed column and reversing the child order (Footer -> Body -> Header),
+    /// we ensure that the Body (which contains the model dropdown) is painted AFTER the Footer,
+    /// allowing the dropdown list to correctly overlay the bottom action buttons.
     fn render_settings_panel(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         div()
             .flex_1()
             .h_full()
             .flex()
-            .flex_col()
-            // Header
-            .child(
-                div()
-                    .border_b_1()
-                    .border_color(rgb(0x2a2a4a))
-                    .p(px(16.0))
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xeeeeff))
-                            .child("⚙ LLM Settings (BYOK)"),
-                    ),
-            )
-            // Body
-            .child(
-                div()
-                    .flex_1()
-                    .p(px(24.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(20.0))
-                    .child(self.render_settings_field(
-                        "API Key",
-                        self.settings_api_key.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(self.render_settings_field(
-                        "Model",
-                        self.settings_model.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(self.render_settings_field(
-                        "Base URL",
-                        self.settings_base_url.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .p(px(12.0))
-                            .bg(rgb(0x1a3a5c))
-                            .rounded(px(8.0))
-                            .text_xs()
-                            .text_color(rgb(0x8899bb))
-                            .child("💡 Click a field to focus and edit. Press Enter to save."),
-                    ),
-            )
-            // Save button
+            .flex_col_reverse()
+            // Save button (Footer)
             .child(
                 div()
                     .border_t_1()
@@ -2343,6 +2349,188 @@ impl MobieWorkspace {
                             )
                             .child("Cancel"),
                     ),
+            )
+            // Body
+            .child(
+                div()
+                    .flex_1()
+                    .p(px(24.0))
+                    .flex()
+                    .flex_col_reverse()
+                    .gap(px(20.0))
+                    .child(div().flex_1()) // Spacer to push content to the top
+                    .child(
+                        div()
+                            .mt(px(8.0))
+                            .p(px(12.0))
+                            .bg(rgb(0x1a3a5c))
+                            .rounded(px(8.0))
+                            .text_xs()
+                            .text_color(rgb(0x8899bb))
+                            .child("💡 Click a field to focus and edit. Press Enter to save."),
+                    )
+                    .child(self.render_settings_field(
+                        "Base URL",
+                        self.settings_base_url.clone(),
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_model_selection(cx))
+                    .child(self.render_settings_field(
+                        "API Key",
+                        self.settings_api_key.clone(),
+                        window,
+                        cx,
+                    )),
+            )
+            // Header
+            .child(
+                div()
+                    .border_b_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .p(px(16.0))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xeeeeff))
+                            .child("⚙ LLM Settings (BYOK)"),
+                    ),
+            )
+    }
+
+    fn render_model_selection(&self, cx: &mut Context<Self>) -> Div {
+        let selected_model = self.settings_model.read(cx).text().to_string();
+        let is_open = self.model_dropdown_open;
+        let models = self.available_models.clone();
+        let fetching = self.fetching_models;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x666688))
+                    .child("Model"),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        // Selected item box
+                        div()
+                            .bg(rgb(0x16213e))
+                            .border_1()
+                            .border_color(if is_open { rgb(0x4488cc) } else { rgb(0x2a2a4a) })
+                            .rounded(px(6.0))
+                            .px(px(12.0))
+                            .py(px(10.0))
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.model_dropdown_open = !this.model_dropdown_open;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if selected_model.is_empty() {
+                                        rgb(0x555566)
+                                    } else {
+                                        rgb(0xeeeeff)
+                                    })
+                                    .child(if selected_model.is_empty() {
+                                        "Select a model...".to_string()
+                                    } else {
+                                        selected_model.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .ml_2()
+                                    .text_sm()
+                                    .text_color(rgb(0x888899))
+                                    .child(if fetching { "⌛" } else if is_open { "▲" } else { "▼" }),
+                            ),
+                    )
+                    .when(is_open, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .top_full()
+                                .mt_1()
+                                .w_full()
+                                .max_h(px(300.0))
+                                .bg(rgb(0x1a2a4a))
+                                .border_1()
+                                .border_color(rgb(0x4488cc))
+                                .rounded(px(6.0))
+                                .shadow_lg()
+                                .id("model-dropdown-list")
+                                .overflow_y_scroll()
+                                .children(if models.is_empty() {
+                                    vec![div()
+                                        .p(px(12.0))
+                                        .text_xs()
+                                        .text_color(rgb(0x888899))
+                                        .child("No models found. Check your API Key and Base URL.")]
+                                } else {
+                                    models
+                                        .into_iter()
+                                        .map(|model| {
+                                            let model_id = model.id.clone();
+                                            let is_selected = model_id == selected_model;
+                                            
+                                            div()
+                                                .p(px(10.0))
+                                                .cursor_pointer()
+                                                .hover(|s| s.bg(rgb(0x2a3a5c)))
+                                                .when(is_selected, |s| s.bg(rgb(0x3a4a6c)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        this.settings_model.update(cx, |input, cx| {
+                                                            input.set_text(model_id.clone(), cx);
+                                                        });
+                                                        this.model_dropdown_open = false;
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .text_color(if is_selected { rgb(0xffffff) } else { rgb(0xeeeeff) })
+                                                                .child(model.id),
+                                                        )
+                                                        .when_some(model.name, |this, name| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(rgb(0x888899))
+                                                                    .child(name),
+                                                            )
+                                                        }),
+                                                )
+                                        })
+                                        .collect()
+                                }),
+                        )
+                    }),
             )
     }
 
