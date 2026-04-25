@@ -104,6 +104,13 @@ impl TextInput {
         &self.text
     }
 
+    pub fn set_text(&mut self, text: String, _cx: &mut Context<Self>) {
+        self.text = text;
+        self.cursor_offset = self.text.chars().count();
+        self.selection_anchor = None;
+        self.invalidate_cache();
+    }
+
     pub fn selection_range(&self) -> Option<Range<usize>> {
         let anchor = self.selection_anchor?;
         let start = anchor.min(self.cursor_offset);
@@ -963,6 +970,7 @@ pub struct MobieWorkspace {
 
     available_models: Vec<crate::llm::ModelData>,
     fetching_models: bool,
+    model_dropdown_open: bool,
 }
 
 impl MobieWorkspace {
@@ -1103,6 +1111,7 @@ impl MobieWorkspace {
             settings_base_url,
             available_models: vec![],
             fetching_models: false,
+            model_dropdown_open: false,
         }
     }
 
@@ -2316,12 +2325,7 @@ impl MobieWorkspace {
                         window,
                         cx,
                     ))
-                    .child(self.render_settings_field(
-                        "Model",
-                        self.settings_model.clone(),
-                        window,
-                        cx,
-                    ))
+                    .child(self.render_model_selection(cx))
                     .child(self.render_settings_field(
                         "Base URL",
                         self.settings_base_url.clone(),
@@ -2384,6 +2388,137 @@ impl MobieWorkspace {
                             )
                             .child("Cancel"),
                     ),
+            )
+    }
+
+    fn render_model_selection(&self, cx: &mut Context<Self>) -> Div {
+        let selected_model = self.settings_model.read(cx).text().to_string();
+        let is_open = self.model_dropdown_open;
+        let models = self.available_models.clone();
+        let fetching = self.fetching_models;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x666688))
+                    .child("Model"),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        // Selected item box
+                        div()
+                            .bg(rgb(0x16213e))
+                            .border_1()
+                            .border_color(if is_open { rgb(0x4488cc) } else { rgb(0x2a2a4a) })
+                            .rounded(px(6.0))
+                            .px(px(12.0))
+                            .py(px(10.0))
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.model_dropdown_open = !this.model_dropdown_open;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if selected_model.is_empty() {
+                                        rgb(0x555566)
+                                    } else {
+                                        rgb(0xeeeeff)
+                                    })
+                                    .child(if selected_model.is_empty() {
+                                        "Select a model...".to_string()
+                                    } else {
+                                        selected_model.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x666688))
+                                    .child(if fetching { "⌛" } else if is_open { "▴" } else { "▾" }),
+                            ),
+                    )
+                    .when(is_open, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .top_full()
+                                .mt_1()
+                                .w_full()
+                                .max_h(px(300.0))
+                                .bg(rgb(0x1a2a4a))
+                                .border_1()
+                                .border_color(rgb(0x4488cc))
+                                .rounded(px(6.0))
+                                .shadow_lg()
+                                .id("model-dropdown-list")
+                                .overflow_y_scroll()
+                                .children(if models.is_empty() {
+                                    vec![div()
+                                        .p(px(12.0))
+                                        .text_xs()
+                                        .text_color(rgb(0x888899))
+                                        .child("No models found. Check your API Key and Base URL.")]
+                                } else {
+                                    models
+                                        .into_iter()
+                                        .map(|model| {
+                                            let model_id = model.id.clone();
+                                            let is_selected = model_id == selected_model;
+                                            
+                                            div()
+                                                .p(px(10.0))
+                                                .cursor_pointer()
+                                                .hover(|s| s.bg(rgb(0x2a3a5c)))
+                                                .when(is_selected, |s| s.bg(rgb(0x3a4a6c)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        this.settings_model.update(cx, |input, cx| {
+                                                            input.set_text(model_id.clone(), cx);
+                                                        });
+                                                        this.model_dropdown_open = false;
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .text_color(if is_selected { rgb(0xffffff) } else { rgb(0xeeeeff) })
+                                                                .child(model.id),
+                                                        )
+                                                        .when_some(model.name, |this, name| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(rgb(0x888899))
+                                                                    .child(name),
+                                                            )
+                                                        }),
+                                                )
+                                        })
+                                        .collect()
+                                }),
+                        )
+                    }),
             )
     }
 
