@@ -26,8 +26,3 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: Delete Session History**
 *Link: [./tracks/delete_session_history_20260425/](./tracks/delete_session_history_20260425/)*
-
----
-
-- [x] **Track: implement model selection using dropdown, not input manually. this will reduce human error while input models name if you made a changes, always call @rust-reviewer to review your changes**
-*Link: [./tracks/model_selection_dropdown_20260425/](./tracks/model_selection_dropdown_20260425/)*
