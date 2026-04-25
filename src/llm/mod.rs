@@ -21,6 +21,30 @@ pub struct ModelListResponse {
     pub data: Vec<ModelData>,
 }
 
+pub async fn fetch_models(base_url: &str, api_key: &str) -> anyhow::Result<Vec<ModelData>> {
+    let url = if base_url.ends_with('/') {
+        format!("{}models", base_url)
+    } else {
+        format!("{}/models", base_url)
+    };
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to fetch models: {} - {}", status, body);
+    }
+
+    let model_list: ModelListResponse = response.json().await?;
+    Ok(model_list.data)
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {

@@ -960,6 +960,9 @@ pub struct MobieWorkspace {
     settings_api_key: Entity<TextInput>,
     settings_model: Entity<TextInput>,
     settings_base_url: Entity<TextInput>,
+
+    available_models: Vec<crate::llm::ModelData>,
+    fetching_models: bool,
 }
 
 impl MobieWorkspace {
@@ -971,6 +974,23 @@ impl MobieWorkspace {
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let chat_scroll_handle = ScrollHandle::new();
+
+        // Initial fetch of models
+        let base_url = initial_config.llm.base_url.clone();
+        let api_key = initial_config.llm.api_key.clone();
+        cx.spawn(async move |this, cx| {
+            if !api_key.is_empty() {
+                if let Ok(models) = crate::llm::fetch_models(&base_url, &api_key).await {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |workspace, cx| {
+                            workspace.available_models = models;
+                            cx.notify();
+                        })
+                    });
+                }
+            }
+        })
+        .detach();
 
         // Spawn async task to forward agent updates into GPUI entity
         cx.spawn(async move |this, cx| {
@@ -1076,6 +1096,8 @@ impl MobieWorkspace {
             settings_api_key,
             settings_model,
             settings_base_url,
+            available_models: vec![],
+            fetching_models: false,
         }
     }
 
@@ -1194,12 +1216,40 @@ impl MobieWorkspace {
     }
 
     fn save_settings(&mut self, _: &SaveSettings, _window: &mut Window, cx: &mut Context<Self>) {
+        let api_key = self.settings_api_key.read(cx).text().to_string();
+        let base_url = self.settings_base_url.read(cx).text().to_string();
+        let model = self.settings_model.read(cx).text().to_string();
+
         let new_llm = LlmConfig {
-            api_key: self.settings_api_key.read(cx).text().to_string(),
-            model: self.settings_model.read(cx).text().to_string(),
-            base_url: self.settings_base_url.read(cx).text().to_string(),
+            api_key: api_key.clone(),
+            model,
+            base_url: base_url.clone(),
             provider: "openai".to_string(),
         };
+
+        // Trigger re-fetch of models if credentials changed
+        if !api_key.is_empty() {
+            self.fetching_models = true;
+            cx.spawn(async move |this, cx| {
+                if let Ok(models) = crate::llm::fetch_models(&base_url, &api_key).await {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |workspace, cx| {
+                            workspace.available_models = models;
+                            workspace.fetching_models = false;
+                            cx.notify();
+                        })
+                    });
+                } else {
+                    let _ = cx.update(|cx| {
+                        this.update(cx, |workspace, cx| {
+                            workspace.fetching_models = false;
+                            cx.notify();
+                        })
+                    });
+                }
+            })
+            .detach();
+        }
 
         // Persist to disk
         let cfg = AppConfig {
