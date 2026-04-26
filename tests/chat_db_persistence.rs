@@ -15,6 +15,7 @@ fn test_chat_message_persistence() -> Result<()> {
         timestamp: Utc::now(),
         goal: "Test Goal".to_string(),
         status: "in_progress".to_string(),
+        summary: None,
         chat_log_path: None,
         yaml_path: None,
     };

@@ -188,6 +188,7 @@ impl AgentEngine {
                             timestamp: chrono::Utc::now(),
                             goal: goal.clone(),
                             status: "in_progress".to_string(),
+                            summary: None,
                             chat_log_path: None,
                             yaml_path: None,
                         };
@@ -220,6 +221,7 @@ impl AgentEngine {
                     let result = rig_agent.think(&goal, screenshots).await;
                     let mut yaml_path = None;
                     let mut status = "success".to_string();
+                    let mut summary = None;
 
                     match result {
                         Ok(res) => {
@@ -232,6 +234,13 @@ impl AgentEngine {
                                     content: res.clone(),
                                     timestamp: chrono::Utc::now(),
                                 });
+                            }
+
+                            // Generate AI summary
+                            if let Ok(h) = rig_agent.history.lock() {
+                                if let Ok(s) = rig_agent.generate_summary(&goal, &h, &res).await {
+                                    summary = Some(s);
+                                }
                             }
 
                             let _ = update_tx
@@ -277,6 +286,7 @@ impl AgentEngine {
                             timestamp: chrono::Utc::now(),
                             goal: goal.clone(),
                             status,
+                            summary,
                             chat_log_path: None,
                             yaml_path,
                         };
@@ -381,6 +391,7 @@ impl AgentEngine {
                             timestamp: chrono::Utc::now(),
                             goal: format!("Retest: {}", path.file_name().unwrap_or_default().to_string_lossy()),
                             status,
+                            summary: None,
                             chat_log_path: None,
                             yaml_path: yaml_output_path,
                         };

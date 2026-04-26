@@ -10,6 +10,7 @@ pub struct Session {
     pub timestamp: DateTime<Utc>,
     pub goal: String,
     pub status: String,
+    pub summary: Option<String>,
     pub chat_log_path: Option<String>,
     pub yaml_path: Option<String>,
 }
@@ -54,6 +55,7 @@ impl SessionManager {
                 timestamp TEXT NOT NULL,
                 goal TEXT NOT NULL,
                 status TEXT NOT NULL,
+                summary TEXT,
                 chat_log_path TEXT,
                 yaml_path TEXT
             )",
@@ -77,13 +79,14 @@ impl SessionManager {
 
     pub fn insert_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO sessions (id, timestamp, goal, status, chat_log_path, yaml_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO sessions (id, timestamp, goal, status, summary, chat_log_path, yaml_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 session.id,
                 session.timestamp.to_rfc3339(),
                 session.goal,
                 session.status,
+                session.summary,
                 session.chat_log_path,
                 session.yaml_path,
             ],
@@ -93,7 +96,7 @@ impl SessionManager {
 
     pub fn get_all_sessions(&self) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, goal, status, chat_log_path, yaml_path FROM sessions ORDER BY timestamp DESC"
+            "SELECT id, timestamp, goal, status, summary, chat_log_path, yaml_path FROM sessions ORDER BY timestamp DESC"
         ).context("Failed to prepare SELECT statement")?;
 
         let session_iter = stmt.query_map([], |row| {
@@ -107,8 +110,9 @@ impl SessionManager {
                 timestamp,
                 goal: row.get(2)?,
                 status: row.get(3)?,
-                chat_log_path: row.get(4)?,
-                yaml_path: row.get(5)?,
+                summary: row.get(4)?,
+                chat_log_path: row.get(5)?,
+                yaml_path: row.get(6)?,
             })
         }).context("Failed to query sessions")?;
 
@@ -129,12 +133,13 @@ impl SessionManager {
 
     pub fn update_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
-            "UPDATE sessions SET timestamp = ?2, goal = ?3, status = ?4, chat_log_path = ?5, yaml_path = ?6 WHERE id = ?1",
+            "UPDATE sessions SET timestamp = ?2, goal = ?3, status = ?4, summary = ?5, chat_log_path = ?6, yaml_path = ?7 WHERE id = ?1",
             params![
                 session.id,
                 session.timestamp.to_rfc3339(),
                 session.goal,
                 session.status,
+                session.summary,
                 session.chat_log_path,
                 session.yaml_path,
             ],
@@ -200,6 +205,7 @@ mod tests {
             timestamp: Utc::now(),
             goal: "Test Goal".to_string(),
             status: "success".to_string(),
+            summary: Some("Summary".to_string()),
             chat_log_path: Some("/tmp/chat.log".to_string()),
             yaml_path: Some("/tmp/test.yaml".to_string()),
         };

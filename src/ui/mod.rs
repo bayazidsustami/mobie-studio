@@ -1388,7 +1388,7 @@ impl MobieWorkspace {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(0x888899))
-                                                    .child(session.timestamp.format("%m-%d %H:%M").to_string()),
+                                                    .child(session.timestamp.format("%Y-%m-%d %H:%M").to_string()),
                                             )
                                             .child(
                                                 div()
@@ -1397,7 +1397,16 @@ impl MobieWorkspace {
                                                     .text_color(if is_selected { rgb(0xeeeeff) } else { rgb(0xccccdd) })
                                                     .overflow_hidden()
                                                     .child(session.goal.clone()),
-                                            ),
+                                            )
+                                            .when_some(session.summary.as_ref(), |d, summary| {
+                                                d.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(0x888899))
+                                                        .italic()
+                                                        .child(summary.clone())
+                                                )
+                                            }),
                                     )
                             })),
                     )
@@ -1897,7 +1906,16 @@ impl MobieWorkspace {
                                     .text_color(rgb(0xeeeeff))
                                     .overflow_hidden()
                                     .child(session.goal.clone()),
-                            ),
+                            )
+                            .when_some(session.summary.as_ref(), |d, summary| {
+                                d.child(
+                                    div()
+                                        .text_sm()
+                                        .italic()
+                                        .text_color(rgb(0x888899))
+                                        .child(summary.clone())
+                                )
+                            }),
                     )
                     .child(
                         div()
