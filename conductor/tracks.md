@@ -26,3 +26,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: Delete Session History**
 *Link: [./tracks/delete_session_history_20260425/](./tracks/delete_session_history_20260425/)*
+
+---
+
+- [ ] **Track: Chat Session Saving and Reloading**
+*Link: [./tracks/chat_session_saving_20260426/](./tracks/chat_session_saving_20260426/)*
