@@ -62,6 +62,9 @@ impl SessionManager {
             [],
         ).context("Failed to initialize database schema")?;
 
+        // Migration: ensure summary column exists (ignore error if already exists)
+        let _ = self.conn.execute("ALTER TABLE sessions ADD COLUMN summary TEXT", []);
+
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
