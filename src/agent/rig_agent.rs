@@ -90,6 +90,26 @@ impl RigAgent {
             Err(e) => Err(anyhow::anyhow!("Rig agent prompt failed: {}", e)),
         }
     }
+
+    pub async fn generate_summary(&self, goal: &str, history: &[TestStep], final_res: &str) -> Result<String, anyhow::Error> {
+        let client = self.build_client()?;
+
+        let agent = client
+            .agent(&self.config.model)
+            .preamble("You are a helpful assistant. Summarize the following mobile testing session in one short sentence (max 15 words). Focus on what was achieved.")
+            .build();
+
+        let mut content = format!("Goal: {}\n\nSteps:\n", goal);
+        for step in history {
+            content.push_str(&format!("- Action: {}, Reasoning: {}\n", step.action, step.reasoning));
+        }
+        content.push_str(&format!("\nFinal Result: {}", final_res));
+
+        match agent.prompt(content).await {
+            Ok(res) => Ok(res.trim().to_string()),
+            Err(e) => Err(anyhow::anyhow!("Summary generation failed: {}", e)),
+        }
+    }
 }
 
 #[cfg(test)]

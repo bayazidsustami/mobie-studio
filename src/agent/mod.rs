@@ -181,6 +181,33 @@ impl AgentEngine {
                     info!("Received goal: {} (screenshots: {})", goal, screenshots);
                     let session_id = format!("sess_{}", chrono::Utc::now().timestamp());
                     
+                    // Log session to DB FIRST to satisfy foreign key constraints
+                    if let Some(ref mgr) = session_manager {
+                        let session = crate::db::Session {
+                            id: session_id.clone(),
+                            timestamp: chrono::Utc::now(),
+                            goal: goal.clone(),
+                            status: "in_progress".to_string(),
+                            summary: None,
+                            chat_log_path: None,
+                            yaml_path: None,
+                        };
+                        if let Err(e) = mgr.insert_session(&session) {
+                            error!("Failed to log session to DB: {}", e);
+                        }
+                    }
+
+                    // Save user message to DB
+                    if let Some(ref mgr) = session_manager {
+                        let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                            id: None,
+                            session_id: session_id.clone(),
+                            role: "user".to_string(),
+                            content: goal.clone(),
+                            timestamp: chrono::Utc::now(),
+                        });
+                    }
+
                     let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
                             "🎯 Starting: \"{}\" (ID: {})",
@@ -194,9 +221,28 @@ impl AgentEngine {
                     let result = rig_agent.think(&goal, screenshots).await;
                     let mut yaml_path = None;
                     let mut status = "success".to_string();
+                    let mut summary = None;
 
                     match result {
                         Ok(res) => {
+                            // Save assistant message to DB
+                            if let Some(ref mgr) = session_manager {
+                                let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                                    id: None,
+                                    session_id: session_id.clone(),
+                                    role: "assistant".to_string(),
+                                    content: res.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                });
+                            }
+
+                            // Generate AI summary
+                            if let Ok(h) = rig_agent.history.lock() {
+                                if let Ok(s) = rig_agent.generate_summary(&goal, &h, &res).await {
+                                    summary = Some(s);
+                                }
+                            }
+
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
                                 .await;
@@ -225,6 +271,18 @@ impl AgentEngine {
                         Err(e) => {
                             error!("Agent failed: {}", e);
                             status = format!("error: {}", e);
+
+                            // Save error message as assistant reply to DB
+                            if let Some(ref mgr) = session_manager {
+                                let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                                    id: None,
+                                    session_id: session_id.clone(),
+                                    role: "assistant".to_string(),
+                                    content: format!("❌ Error: {}", e),
+                                    timestamp: chrono::Utc::now(),
+                                });
+                            }
+
                             let _ = update_tx
                                 .send(AgentUpdate::StatusChanged(AgentStatus::Error(
                                     e.to_string(),
@@ -233,18 +291,19 @@ impl AgentEngine {
                         }
                     }
 
-                    // Log to DB
+                    // Update session in DB
                     if let Some(ref mgr) = session_manager {
                         let session = crate::db::Session {
                             id: session_id,
                             timestamp: chrono::Utc::now(),
                             goal: goal.clone(),
                             status,
-                            chat_log_path: None, // We could serialize history to a file if needed
+                            summary,
+                            chat_log_path: None,
                             yaml_path,
                         };
-                        if let Err(e) = mgr.insert_session(&session) {
-                            error!("Failed to log session to DB: {}", e);
+                        if let Err(e) = mgr.update_session(&session) {
+                            error!("Failed to update session in DB: {}", e);
                         } else {
                             let _ = update_tx.send(AgentUpdate::SessionSaved).await;
                         }
@@ -340,16 +399,41 @@ impl AgentEngine {
                     // Log Retest to DB
                     if let Some(ref mgr) = session_manager {
                         let session = crate::db::Session {
-                            id: session_id,
+                            id: session_id.clone(),
                             timestamp: chrono::Utc::now(),
                             goal: format!("Retest: {}", path.file_name().unwrap_or_default().to_string_lossy()),
-                            status,
+                            status: status.clone(),
+                            summary: None,
                             chat_log_path: None,
                             yaml_path: yaml_output_path,
                         };
                         if mgr.insert_session(&session).is_ok() {
+                            // Save initial retest message
+                            let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                                id: None,
+                                session_id: session_id.clone(),
+                                role: "user".to_string(),
+                                content: format!("Retest scenario: {}", path.to_string_lossy()),
+                                timestamp: chrono::Utc::now(),
+                            });
+
                             let _ = update_tx.send(AgentUpdate::SessionSaved).await;
                         }
+                    }
+
+                    // Save completion message
+                    if let Some(ref mgr) = session_manager {
+                        let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                            id: None,
+                            session_id: session_id.clone(),
+                            role: "assistant".to_string(),
+                            content: if status == "success" {
+                                "✅ Replay complete!".to_string()
+                            } else {
+                                format!("❌ Replay failed: {}", status)
+                            },
+                            timestamp: chrono::Utc::now(),
+                        });
                     }
                     
                     let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Idle)).await;

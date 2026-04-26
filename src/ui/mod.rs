@@ -1199,6 +1199,38 @@ impl MobieWorkspace {
         cx.notify();
     }
 
+    fn reload_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        let db_path = crate::config::db_path();
+        if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+            if let Ok(messages) = mgr.get_chat_messages(session_id) {
+                // 1. Clear current chat messages
+                self.messages.clear();
+
+                // 2. Populate with history
+                for msg in messages {
+                    let role = if msg.role == "user" {
+                        ChatRole::User
+                    } else if msg.role == "assistant" {
+                        ChatRole::Agent
+                    } else {
+                        ChatRole::System
+                    };
+
+                    self.messages.push(ChatMessage {
+                        role,
+                        content: msg.content,
+                    });
+                }
+
+                // 3. Switch to Chat view
+                self.current_view = AppView::Chat;
+                self.chat_scroll_handle.scroll_to_bottom();
+                
+                cx.notify();
+            }
+        }
+    }
+
     fn navigate_settings(
         &mut self,
         _: &NavigateSettings,
@@ -1388,7 +1420,7 @@ impl MobieWorkspace {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(0x888899))
-                                                    .child(session.timestamp.format("%m-%d %H:%M").to_string()),
+                                                    .child(session.timestamp.format("%Y-%m-%d %H:%M").to_string()),
                                             )
                                             .child(
                                                 div()
@@ -1397,7 +1429,16 @@ impl MobieWorkspace {
                                                     .text_color(if is_selected { rgb(0xeeeeff) } else { rgb(0xccccdd) })
                                                     .overflow_hidden()
                                                     .child(session.goal.clone()),
-                                            ),
+                                            )
+                                            .when_some(session.summary.as_ref(), |d, summary| {
+                                                d.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(0x888899))
+                                                        .italic()
+                                                        .child(summary.clone())
+                                                )
+                                            }),
                                     )
                             })),
                     )
@@ -1897,17 +1938,51 @@ impl MobieWorkspace {
                                     .text_color(rgb(0xeeeeff))
                                     .overflow_hidden()
                                     .child(session.goal.clone()),
-                            ),
+                            )
+                            .when_some(session.summary.as_ref(), |d, summary| {
+                                d.child(
+                                    div()
+                                        .text_sm()
+                                        .italic()
+                                        .text_color(rgb(0x888899))
+                                        .child(summary.clone())
+                                )
+                            }),
                     )
                     .child(
                         div()
-                            .p_2()
-                            .rounded(px(6.0))
-                            .bg(rgb(0x3a2a2a))
-                            .hover(|s| s.bg(rgb(0x5a2a2a)))
-                            .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                                let session_id = session_id.clone();
+                            .flex()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded(px(6.0))
+                                    .bg(rgb(0x2a3a2a))
+                                    .hover(|s| s.bg(rgb(0x3a5a3a)))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let session_id = session.id.clone();
+                                        cx.listener(move |this, _, _, cx| {
+                                            // Handle Reload
+                                            this.reload_session(&session_id, cx);
+                                        })
+                                    })
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0x55ff55))
+                                            .child("Reload Session"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded(px(6.0))
+                                    .bg(rgb(0x3a2a2a))
+                                    .hover(|s| s.bg(rgb(0x5a2a2a)))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                        let session_id = session_id.clone();
                                 let yaml_path = yaml_path.clone();
                                 let chat_log_path = chat_log_path.clone();
 
@@ -1952,6 +2027,7 @@ impl MobieWorkspace {
                                     .child("Delete Session"),
                             ),
                     ),
+            )
             )
             .child(
                 div()
