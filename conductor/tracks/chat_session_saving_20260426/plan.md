@@ -21,12 +21,12 @@
     - [x] Modify the UI components to construct and render this composite title.
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Session Metadata and AI Summary' (Protocol in workflow.md) [74dc51f]
 
-## Phase 3: Reload Session UI and Logic [checkpoint: ]
-- [ ] Task: Add "Reload Session" button to the session detail view in `src/ui/mod.rs`.
-    - [ ] Write a test to verify the button appears when a session is selected.
-    - [ ] Implement the UI button and tie its click handler to a new `ReloadSession` event.
-- [ ] Task: Implement the session reloading state transition in `src/ui/mod.rs` and `src/agent/mod.rs`.
-    - [ ] Write a test verifying that `ReloadSession` fetches messages and replaces the active state.
-    - [ ] Implement the logic to fetch `chat_messages` for the `session_id`, clear current chat state, and populate it with the fetched messages.
-    - [ ] Ensure the application redirects the user to the main chat interface upon successful reload.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Reload Session UI and Logic' (Protocol in workflow.md)
+## Phase 3: Reload Session UI and Logic [checkpoint: 27df3c8]
+- [x] Task: Add "Reload Session" button to the session detail view in `src/ui/mod.rs`. [27df3c8]
+    - [x] Write a test to verify the button appears when a session is selected.
+    - [x] Implement the UI button and tie its click handler to a new `ReloadSession` event.
+- [x] Task: Implement the session reloading state transition in `src/ui/mod.rs` and `src/agent/mod.rs`. [27df3c8]
+    - [x] Write a test verifying that `ReloadSession` fetches messages and replaces the active state.
+    - [x] Implement the logic to fetch `chat_messages` for the `session_id`, clear current chat state, and populate it with the fetched messages.
+    - [x] Ensure the application redirects the user to the main chat interface upon successful reload.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Reload Session UI and Logic' (Protocol in workflow.md) [27df3c8]
