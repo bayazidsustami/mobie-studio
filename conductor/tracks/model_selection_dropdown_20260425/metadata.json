@@ -1,0 +1,8 @@
+{
+  "track_id": "model_selection_dropdown_20260425",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-04-25T23:55:00Z",
+  "updated_at": "2026-04-25T23:55:00Z",
+  "description": "implement model selection using dropdown, not input manually. this will reduce human error while input models name if you made a changes, always call @rust-reviewer to review your changes"
+}

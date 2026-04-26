@@ -20,8 +20,8 @@ pub enum AgentStatus {
 /// Messages the UI sends **to** the Agent Engine.
 #[derive(Debug, Clone)]
 pub enum AgentMessage {
-    /// Start a new goal (exploratory run).
-    StartGoal(String),
+    /// Start a new goal (exploratory run) with optional screenshot toggle.
+    StartGoal(String, bool),
     /// Cancel the current goal.
     Stop,
     /// Update LLM configuration (API key, model, etc.) at runtime.
@@ -34,6 +34,10 @@ pub enum AgentMessage {
     LaunchEmulator(String),
     /// Stop an emulator by ID.
     StopEmulator(String),
+    /// Replay an existing YAML test case, bypassing LLM reasoning.
+    RetestScenario(std::path::PathBuf),
+    /// Fetch available models from the provider.
+    FetchModels(String, String),
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -43,6 +47,14 @@ pub enum AgentUpdate {
     AgentReply(String),
     /// Refreshed list of devices with their status.
     DeviceList(Vec<(String, DeviceStatus)>),
+    /// Emitted when a YAML test case is successfully generated.
+    TestGenerated(std::path::PathBuf),
+    /// Emitted when a session is saved to the database.
+    SessionSaved,
+    /// Successfully fetched available models.
+    ModelsFetched(Vec<crate::llm::ModelData>),
+    /// Failed to fetch available models.
+    ModelsFetchFailed(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +82,9 @@ impl AgentEngine {
     ) {
         info!("Agent Engine loop started.");
         let mut device = DeviceBridge::new();
+        
+        let db_path = crate::config::db_path();
+        let session_manager = crate::db::SessionManager::new(db_path).ok();
 
         let mut config = LlmConfig {
             api_key: "".into(),
@@ -162,26 +177,112 @@ impl AgentEngine {
                         .await;
                 }
 
-                AgentMessage::StartGoal(goal) => {
-                    info!("Received goal: {}", goal);
+                AgentMessage::StartGoal(goal, screenshots) => {
+                    info!("Received goal: {} (screenshots: {})", goal, screenshots);
+                    let session_id = format!("sess_{}", chrono::Utc::now().timestamp());
+                    
+                    // Log session to DB FIRST to satisfy foreign key constraints
+                    if let Some(ref mgr) = session_manager {
+                        let session = crate::db::Session {
+                            id: session_id.clone(),
+                            timestamp: chrono::Utc::now(),
+                            goal: goal.clone(),
+                            status: "in_progress".to_string(),
+                            summary: None,
+                            chat_log_path: None,
+                            yaml_path: None,
+                        };
+                        if let Err(e) = mgr.insert_session(&session) {
+                            error!("Failed to log session to DB: {}", e);
+                        }
+                    }
+
+                    // Save user message to DB
+                    if let Some(ref mgr) = session_manager {
+                        let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                            id: None,
+                            session_id: session_id.clone(),
+                            role: "user".to_string(),
+                            content: goal.clone(),
+                            timestamp: chrono::Utc::now(),
+                        });
+                    }
+
                     let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
-                            "🎯 Starting: \"{}\"",
-                            goal
+                            "🎯 Starting: \"{}\" (ID: {})",
+                            goal, session_id
                         )))
                         .await;
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                         .await;
 
-                    match rig_agent.think(&goal).await {
+                    let result = rig_agent.think(&goal, screenshots).await;
+                    let mut yaml_path = None;
+                    let mut status = "success".to_string();
+                    let mut summary = None;
+
+                    match result {
                         Ok(res) => {
+                            // Save assistant message to DB
+                            if let Some(ref mgr) = session_manager {
+                                let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                                    id: None,
+                                    session_id: session_id.clone(),
+                                    role: "assistant".to_string(),
+                                    content: res.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                });
+                            }
+
+                            // Generate AI summary
+                            if let Ok(h) = rig_agent.history.lock() {
+                                if let Ok(s) = rig_agent.generate_summary(&goal, &h, &res).await {
+                                    summary = Some(s);
+                                }
+                            }
+
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
                                 .await;
+                            
+                            // Generate YAML test case
+                            if let Ok(h) = rig_agent.history.lock() {
+                                if !h.is_empty() {
+                                    let tc = crate::yaml_exporter::TestCase {
+                                        goal: goal.clone(),
+                                        screenshots,
+                                        steps: h.clone(),
+                                        success: true,
+                                    };
+                                    match crate::yaml_exporter::export(&tc) {
+                                        Ok(path) => {
+                                            yaml_path = Some(path.to_string_lossy().to_string());
+                                            let _ = update_tx.send(AgentUpdate::TestGenerated(path)).await;
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to export YAML test case: {}", e);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             error!("Agent failed: {}", e);
+                            status = format!("error: {}", e);
+
+                            // Save error message as assistant reply to DB
+                            if let Some(ref mgr) = session_manager {
+                                let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                                    id: None,
+                                    session_id: session_id.clone(),
+                                    role: "assistant".to_string(),
+                                    content: format!("❌ Error: {}", e),
+                                    timestamp: chrono::Utc::now(),
+                                });
+                            }
+
                             let _ = update_tx
                                 .send(AgentUpdate::StatusChanged(AgentStatus::Error(
                                     e.to_string(),
@@ -189,9 +290,168 @@ impl AgentEngine {
                                 .await;
                         }
                     }
+
+                    // Update session in DB
+                    if let Some(ref mgr) = session_manager {
+                        let session = crate::db::Session {
+                            id: session_id,
+                            timestamp: chrono::Utc::now(),
+                            goal: goal.clone(),
+                            status,
+                            summary,
+                            chat_log_path: None,
+                            yaml_path,
+                        };
+                        if let Err(e) = mgr.update_session(&session) {
+                            error!("Failed to update session in DB: {}", e);
+                        } else {
+                            let _ = update_tx.send(AgentUpdate::SessionSaved).await;
+                        }
+                    }
+
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
+                }
+
+                AgentMessage::RetestScenario(path) => {
+                    info!("Retesting scenario from: {:?}", path);
+                    let session_id = format!("retest_{}", chrono::Utc::now().timestamp());
+                    let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Acting)).await;
+                    let _ = update_tx.send(AgentUpdate::AgentReply(format!("🔄 Replaying: {} (ID: {})", path.file_name().unwrap_or_default().to_string_lossy(), session_id))).await;
+
+                    let mut status = "success".to_string();
+                    let mut yaml_output_path = None;
+
+                    if let Ok(yaml) = std::fs::read_to_string(&path) {
+                        if let Ok(tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
+                            let mut retest_steps = Vec::new();
+                            for step in tc.steps {
+                                let _ = update_tx.send(AgentUpdate::AgentReply(format!("⚡ {} - {}", step.action, step.reasoning))).await;
+                                match step.action.as_str() {
+                                    "tap" => {
+                                        let x = step.params.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let y = step.params.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let _ = device.tap(x, y).await;
+                                    }
+                                    "input" => {
+                                        let text = step.params.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                        let _ = device.input_text(text).await;
+                                    }
+                                    "swipe" => {
+                                        let x = step.params.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let y = step.params.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let direction = step.params.get("direction").and_then(|v| v.as_str()).unwrap_or("up");
+                                        let distance = step.params.get("distance").and_then(|v| v.as_u64()).unwrap_or(500) as u32;
+                                        let (x2, y2) = match direction {
+                                            "up" => (x, y.saturating_sub(distance)),
+                                            "down" => (x, y + distance),
+                                            "left" => (x.saturating_sub(distance), y),
+                                            "right" => (x + distance, y),
+                                            _ => (x, y),
+                                        };
+                                        let _ = device.swipe(x, y, x2, y2, 300).await;
+                                    }
+                                    "key_event" => {
+                                        let code = step.params.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                        let _ = device.keyevent(code).await;
+                                    }
+                                    "screenshot" => {
+                                        let _ = device.screenshot().await;
+                                    }
+                                    _ => {}
+                                }
+
+                                let mut retest_step = step.clone();
+                                if tc.screenshots && step.action != "screenshot" && step.action != "observe" {
+                                    retest_step.screenshot = device.screenshot().await.ok();
+                                } else if step.action == "screenshot" {
+                                    retest_step.screenshot = device.screenshot().await.ok();
+                                }
+                                retest_steps.push(retest_step);
+
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+
+                            // Export retest results if screenshots were taken
+                            if tc.screenshots {
+                                let retest_tc = crate::yaml_exporter::TestCase {
+                                    goal: format!("Retest: {}", tc.goal),
+                                    screenshots: true,
+                                    steps: retest_steps,
+                                    success: true,
+                                };
+                                if let Ok(out_p) = crate::yaml_exporter::export(&retest_tc) {
+                                    yaml_output_path = Some(out_p.to_string_lossy().to_string());
+                                }
+                            }
+
+                            let _ = update_tx.send(AgentUpdate::AgentReply("✅ Replay complete.".to_string())).await;
+                        } else {
+                            status = "error: Failed to parse test case".to_string();
+                            let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to parse test case.".to_string())).await;
+                        }
+                    } else {
+                        status = "error: Failed to read test case file".to_string();
+                        let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to read test case file.".to_string())).await;
+                    }
+
+                    // Log Retest to DB
+                    if let Some(ref mgr) = session_manager {
+                        let session = crate::db::Session {
+                            id: session_id.clone(),
+                            timestamp: chrono::Utc::now(),
+                            goal: format!("Retest: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                            status: status.clone(),
+                            summary: None,
+                            chat_log_path: None,
+                            yaml_path: yaml_output_path,
+                        };
+                        if mgr.insert_session(&session).is_ok() {
+                            // Save initial retest message
+                            let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                                id: None,
+                                session_id: session_id.clone(),
+                                role: "user".to_string(),
+                                content: format!("Retest scenario: {}", path.to_string_lossy()),
+                                timestamp: chrono::Utc::now(),
+                            });
+
+                            let _ = update_tx.send(AgentUpdate::SessionSaved).await;
+                        }
+                    }
+
+                    // Save completion message
+                    if let Some(ref mgr) = session_manager {
+                        let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
+                            id: None,
+                            session_id: session_id.clone(),
+                            role: "assistant".to_string(),
+                            content: if status == "success" {
+                                "✅ Replay complete!".to_string()
+                            } else {
+                                format!("❌ Replay failed: {}", status)
+                            },
+                            timestamp: chrono::Utc::now(),
+                        });
+                    }
+                    
+                    let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Idle)).await;
+                }
+
+                AgentMessage::FetchModels(base_url, api_key) => {
+                    info!("Fetching models from {}...", base_url);
+                    let update_tx = update_tx.clone();
+                    tokio::spawn(async move {
+                        match crate::llm::fetch_models(&base_url, &api_key).await {
+                            Ok(models) => {
+                                let _ = update_tx.send(AgentUpdate::ModelsFetched(models)).await;
+                            }
+                            Err(e) => {
+                                let _ = update_tx.send(AgentUpdate::ModelsFetchFailed(e.to_string())).await;
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -240,5 +500,25 @@ mod tests {
         let (update_tx, _) = mpsc::channel(1);
         let config = crate::config::AppConfig::default();
         let (_engine, _) = AgentEngine::start(update_tx, config);
+    }
+
+    #[tokio::test]
+    async fn test_agent_generates_yaml_on_success() {
+        let update = AgentUpdate::TestGenerated(std::path::PathBuf::from("test.yaml"));
+        if let AgentUpdate::TestGenerated(p) = update {
+            assert_eq!(p.to_str().unwrap(), "test.yaml");
+        } else {
+            panic!("TestGenerated not found");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_handles_retest_scenario_msg() {
+        let msg = AgentMessage::RetestScenario(std::path::PathBuf::from("test.yaml"));
+        if let AgentMessage::RetestScenario(p) = msg {
+            assert_eq!(p.to_str().unwrap(), "test.yaml");
+        } else {
+            panic!("RetestScenario not found");
+        }
     }
 }

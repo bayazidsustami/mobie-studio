@@ -10,8 +10,17 @@ struct MockRunner {
 }
 
 impl CommandRunner for MockRunner {
-    fn run(&self, cmd: &str, _args: &[String]) -> Result<std::process::Output> {
+    fn run(&self, cmd: &str, args: &[String]) -> Result<std::process::Output> {
         if cmd == self.expected_cmd {
+            // Check if it's the screenshot command
+            if args.contains(&"exec-out".to_string()) && args.contains(&"screencap".to_string()) {
+                return Ok(std::process::Output {
+                    status: unsafe { std::mem::zeroed() },
+                    stdout: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], // PNG header
+                    stderr: Vec::new(),
+                });
+            }
+
             Ok(std::process::Output {
                 status: unsafe { std::mem::zeroed() }, // Success status
                 stdout: self.mock_stdout.as_bytes().to_vec(),
@@ -128,4 +137,20 @@ async fn test_get_avd_status_mocked() {
         bridge.get_avd_status("Unknown_AVD").await.unwrap(),
         DeviceStatus::Offline
     );
+}
+
+#[tokio::test]
+async fn test_screenshot_mocked() {
+    let runner = Arc::new(MockRunner {
+        expected_cmd: "adb".to_string(),
+        mock_stdout: "".to_string(),
+    });
+
+    let bridge = DeviceBridge::with_runner(runner);
+    let screenshot_data = bridge.screenshot().await.expect("Failed to take screenshot");
+
+    // Check for PNG header: 89 50 4E 47 0D 0A 1A 0A
+    assert_eq!(screenshot_data.len(), 8);
+    assert_eq!(screenshot_data[0], 0x89);
+    assert_eq!(screenshot_data[1], 0x50);
 }

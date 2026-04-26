@@ -8,6 +8,23 @@ use mobie::ui::{
 };
 use tracing::info;
 
+struct LocalAssetSource;
+
+impl AssetSource for LocalAssetSource {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if let Some(file_path) = path.strip_prefix("file://") {
+            if let Ok(data) = std::fs::read(file_path) {
+                return Ok(Some(std::borrow::Cow::Owned(data)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
+        Ok(vec![])
+    }
+}
+
 fn main() {
     // Initialize structured logging
     tracing_subscriber::fmt::init();
@@ -16,7 +33,9 @@ fn main() {
     // Load persisted config (or default)
     let initial_config = load_config();
 
-    Application::new().run(move |app| {
+    Application::new()
+        .with_assets(LocalAssetSource)
+        .run(move |app| {
         // Bind key actions
         app.bind_keys([
             KeyBinding::new("enter", SendMessage, None),

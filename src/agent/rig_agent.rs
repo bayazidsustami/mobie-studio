@@ -1,15 +1,17 @@
-use crate::agent::tools::{Input, KeyEvent, Observe, Swipe, Tap};
+use crate::agent::tools::{Input, KeyEvent, Observe, Screenshot, Swipe, Tap};
 use crate::device::DeviceBridge;
 use crate::llm::LlmConfig;
+use crate::yaml_exporter::TestStep;
 use reqwest::header::{HeaderMap, HeaderValue};
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::providers::openai;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct RigAgent {
     config: LlmConfig,
     device: Arc<DeviceBridge>,
+    pub history: Arc<Mutex<Vec<TestStep>>>,
 }
 
 impl RigAgent {
@@ -17,10 +19,11 @@ impl RigAgent {
         Self {
             config,
             device: Arc::new(device),
+            history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    fn build_client(&self) -> Result<openai::CompletionsClient<reqwest::Client>, anyhow::Error> {
+    fn build_client(&self) -> Result<openai::Client<reqwest::Client>, anyhow::Error> {
         let api_key = if self.config.api_key.is_empty() {
             "sk-dummy".to_string()
         } else {
@@ -45,20 +48,25 @@ impl RigAgent {
             .api_key(&api_key)
             .base_url(&self.config.base_url)
             .http_client(http_client)
-            .build()?
-            .completions_api())
+            .build()?)
     }
 
-    pub async fn think(&self, goal: &str) -> Result<String, anyhow::Error> {
+    pub async fn think(&self, goal: &str, screenshots: bool) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
+
+        // Clear history before starting a new session/goal
+        if let Ok(mut h) = self.history.lock() {
+            h.clear();
+        }
 
         let agent = client.agent(&self.config.model)
             .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
-            .tool(Tap { device: self.device.clone() })
-            .tool(Input { device: self.device.clone() })
-            .tool(Swipe { device: self.device.clone() })
-            .tool(KeyEvent { device: self.device.clone() })
-            .tool(Observe { device: self.device.clone() })
+            .tool(Tap { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Input { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Swipe { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone(), screenshots })
+            .tool(Observe { device: self.device.clone(), history: self.history.clone() })
+            .tool(Screenshot { device: self.device.clone(), history: self.history.clone() })
             .build();
 
         // Use max_turns to allow the agent to iterate
@@ -80,6 +88,26 @@ impl RigAgent {
         match agent.prompt(goal).await {
             Ok(res) => Ok(res),
             Err(e) => Err(anyhow::anyhow!("Rig agent prompt failed: {}", e)),
+        }
+    }
+
+    pub async fn generate_summary(&self, goal: &str, history: &[TestStep], final_res: &str) -> Result<String, anyhow::Error> {
+        let client = self.build_client()?;
+
+        let agent = client
+            .agent(&self.config.model)
+            .preamble("You are a helpful assistant. Summarize the following mobile testing session in one short sentence (max 15 words). Focus on what was achieved.")
+            .build();
+
+        let mut content = format!("Goal: {}\n\nSteps:\n", goal);
+        for step in history {
+            content.push_str(&format!("- Action: {}, Reasoning: {}\n", step.action, step.reasoning));
+        }
+        content.push_str(&format!("\nFinal Result: {}", final_res));
+
+        match agent.prompt(content).await {
+            Ok(res) => Ok(res.trim().to_string()),
+            Err(e) => Err(anyhow::anyhow!("Summary generation failed: {}", e)),
         }
     }
 }

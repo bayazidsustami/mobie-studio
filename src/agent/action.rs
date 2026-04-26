@@ -54,6 +54,14 @@ pub enum Action {
         reasoning: String,
     },
 
+    /// Take a screenshot of the current device screen.
+    Screenshot {
+        #[serde(default)]
+        sub_goal: String,
+        #[serde(default)]
+        reasoning: String,
+    },
+
     /// The agent considers the goal achieved (or failed).
     Done { success: bool, reason: String },
 }
@@ -82,6 +90,7 @@ impl Action {
             Action::Input { reasoning, .. } => reasoning,
             Action::Swipe { reasoning, .. } => reasoning,
             Action::KeyEvent { reasoning, .. } => reasoning,
+            Action::Screenshot { reasoning, .. } => reasoning,
             Action::Done { reason, .. } => reason,
         }
     }
@@ -92,6 +101,7 @@ impl Action {
             Action::Input { sub_goal, .. } => Some(sub_goal),
             Action::Swipe { sub_goal, .. } => Some(sub_goal),
             Action::KeyEvent { sub_goal, .. } => Some(sub_goal),
+            Action::Screenshot { sub_goal, .. } => Some(sub_goal),
             Action::Done { .. } => None,
         }
     }
@@ -132,6 +142,9 @@ impl std::fmt::Display for Action {
                 code, reasoning, ..
             } => {
                 write!(f, "KeyEvent({}) — {}", code, reasoning)
+            }
+            Action::Screenshot { reasoning, .. } => {
+                write!(f, "Screenshot — {}", reasoning)
             }
             Action::Done { success, reason } => {
                 write!(f, "Done(success={}) — {}", success, reason)
@@ -207,6 +220,18 @@ mod tests {
                 assert_eq!(reasoning, "Press back");
             }
             _ => panic!("Expected KeyEvent"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_screenshot() {
+        let json = r#"{"action": "screenshot", "reasoning": "Take snapshot"}"#;
+        let action: Action = serde_json::from_str(json).unwrap();
+        match action {
+            Action::Screenshot { reasoning, .. } => {
+                assert_eq!(reasoning, "Take snapshot");
+            }
+            _ => panic!("Expected Screenshot"),
         }
     }
 

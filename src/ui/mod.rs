@@ -104,6 +104,13 @@ impl TextInput {
         &self.text
     }
 
+    pub fn set_text(&mut self, text: String, _cx: &mut Context<Self>) {
+        self.text = text;
+        self.cursor_offset = self.text.chars().count();
+        self.selection_anchor = None;
+        self.invalidate_cache();
+    }
+
     pub fn selection_range(&self) -> Option<Range<usize>> {
         let anchor = self.selection_anchor?;
         let start = anchor.min(self.cursor_offset);
@@ -925,12 +932,14 @@ impl EntityInputHandler for TextInput {
 enum AppView {
     Chat,
     Settings,
+    History,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 enum NavTabAction {
     Chat,
     Settings,
+    History,
 }
 
 pub struct MobieWorkspace {
@@ -942,12 +951,26 @@ pub struct MobieWorkspace {
     current_view: AppView,
     devices: Vec<(String, DeviceStatus)>,
     selected_device: Option<String>,
+    latest_test: Option<std::path::PathBuf>,
+
+    // History
+    sessions: Vec<crate::db::Session>,
+    selected_session: Option<crate::db::Session>,
+    selected_test_case: Option<crate::yaml_exporter::TestCase>,
+    
+    // Image Preview
+    preview_image_path: Option<String>,
+    preview_zoom: f32,
 
     // Inputs
     chat_input: Entity<TextInput>,
     settings_api_key: Entity<TextInput>,
     settings_model: Entity<TextInput>,
     settings_base_url: Entity<TextInput>,
+
+    available_models: Vec<crate::llm::ModelData>,
+    fetching_models: bool,
+    model_dropdown_open: bool,
 }
 
 impl MobieWorkspace {
@@ -959,6 +982,17 @@ impl MobieWorkspace {
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let chat_scroll_handle = ScrollHandle::new();
+
+        // Initial fetch of models
+        let base_url = initial_config.llm.base_url.clone();
+        let api_key = initial_config.llm.api_key.clone();
+        if !api_key.is_empty() {
+            let tx = cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::FetchModels(base_url, api_key)).await;
+            })
+            .detach();
+        }
 
         // Spawn async task to forward agent updates into GPUI entity
         cx.spawn(async move |this, cx| {
@@ -989,6 +1023,36 @@ impl MobieWorkspace {
                                 }
                                 info!("Found {} device(s)/AVDs.", count);
                             }
+                            AgentUpdate::TestGenerated(path) => {
+                                workspace.latest_test = Some(path.clone());
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!(
+                                        "💾 YAML test case saved: {}",
+                                        path.file_name().unwrap_or_default().to_string_lossy()
+                                    ),
+                                });
+                                workspace.chat_scroll_handle.scroll_to_bottom();
+                            }
+                            AgentUpdate::SessionSaved => {
+                                let db_path = crate::config::db_path();
+                                if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+                                    if let Ok(sessions) = mgr.get_all_sessions() {
+                                        workspace.sessions = sessions;
+                                    }
+                                }
+                            }
+                            AgentUpdate::ModelsFetched(models) => {
+                                workspace.available_models = models;
+                                workspace.fetching_models = false;
+                            }
+                            AgentUpdate::ModelsFetchFailed(e) => {
+                                workspace.fetching_models = false;
+                                workspace.messages.push(ChatMessage {
+                                    role: ChatRole::System,
+                                    content: format!("⚠️ Failed to fetch models: {}", e),
+                                });
+                            }
                         }
                         cx.notify();
                     })
@@ -1014,6 +1078,15 @@ impl MobieWorkspace {
             )
         });
 
+        // Load initial sessions
+        let mut sessions = vec![];
+        let db_path = crate::config::db_path();
+        if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+            if let Ok(s) = mgr.get_all_sessions() {
+                sessions = s;
+            }
+        }
+
         Self {
             focus_handle,
             chat_scroll_handle,
@@ -1026,10 +1099,19 @@ impl MobieWorkspace {
             current_view: AppView::Chat,
             devices: vec![],
             selected_device: None,
+            latest_test: None,
+            sessions,
+            selected_session: None,
+            selected_test_case: None,
+            preview_image_path: None,
+            preview_zoom: 1.0,
             chat_input,
             settings_api_key,
             settings_model,
             settings_base_url,
+            available_models: vec![],
+            fetching_models: false,
+            model_dropdown_open: false,
         }
     }
 
@@ -1060,11 +1142,28 @@ impl MobieWorkspace {
             cx.notify();
         });
 
-        let tx = self.cmd_tx.clone();
-        cx.spawn(async move |_, _| {
-            let _ = tx.send(AgentMessage::StartGoal(text)).await;
-        })
-        .detach();
+        let lower_text = text.to_lowercase();
+        if lower_text == "/retest" || lower_text == "retest the latest scenario" || lower_text == "run again" {
+            if let Some(path) = self.latest_test.clone() {
+                let tx = self.cmd_tx.clone();
+                cx.spawn(async move |_, _| {
+                    let _ = tx.send(AgentMessage::RetestScenario(path)).await;
+                })
+                .detach();
+            } else {
+                self.messages.push(ChatMessage {
+                    role: ChatRole::System,
+                    content: "❌ No previous test scenario available to retest.".to_string(),
+                });
+                self.chat_scroll_handle.scroll_to_bottom();
+            }
+        } else {
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::StartGoal(text, true)).await;
+            })
+            .detach();
+        }
 
         cx.notify();
     }
@@ -1078,9 +1177,58 @@ impl MobieWorkspace {
         cx.notify();
     }
 
+    fn navigate_history(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.current_view = AppView::History;
+        
+        // Fetch sessions from DB
+        let db_path = crate::config::db_path();
+        if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+            if let Ok(sessions) = mgr.get_all_sessions() {
+                self.sessions = sessions;
+            }
+        }
+        cx.notify();
+    }
+
     fn navigate_chat(&mut self, _: &NavigateChat, _window: &mut Window, cx: &mut Context<Self>) {
         self.current_view = AppView::Chat;
         cx.notify();
+    }
+
+    fn reload_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        let db_path = crate::config::db_path();
+        if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+            if let Ok(messages) = mgr.get_chat_messages(session_id) {
+                // 1. Clear current chat messages
+                self.messages.clear();
+
+                // 2. Populate with history
+                for msg in messages {
+                    let role = if msg.role == "user" {
+                        ChatRole::User
+                    } else if msg.role == "assistant" {
+                        ChatRole::Agent
+                    } else {
+                        ChatRole::System
+                    };
+
+                    self.messages.push(ChatMessage {
+                        role,
+                        content: msg.content,
+                    });
+                }
+
+                // 3. Switch to Chat view
+                self.current_view = AppView::Chat;
+                self.chat_scroll_handle.scroll_to_bottom();
+                
+                cx.notify();
+            }
+        }
     }
 
     fn navigate_settings(
@@ -1114,12 +1262,26 @@ impl MobieWorkspace {
     }
 
     fn save_settings(&mut self, _: &SaveSettings, _window: &mut Window, cx: &mut Context<Self>) {
+        let api_key = self.settings_api_key.read(cx).text().to_string();
+        let base_url = self.settings_base_url.read(cx).text().to_string();
+        let model = self.settings_model.read(cx).text().to_string();
+
         let new_llm = LlmConfig {
-            api_key: self.settings_api_key.read(cx).text().to_string(),
-            model: self.settings_model.read(cx).text().to_string(),
-            base_url: self.settings_base_url.read(cx).text().to_string(),
+            api_key: api_key.clone(),
+            model,
+            base_url: base_url.clone(),
             provider: "openai".to_string(),
         };
+
+        // Trigger re-fetch of models if credentials changed
+        if !api_key.is_empty() {
+            self.fetching_models = true;
+            let tx = self.cmd_tx.clone();
+            cx.spawn(async move |_, _| {
+                let _ = tx.send(AgentMessage::FetchModels(base_url, api_key)).await;
+            })
+            .detach();
+        }
 
         // Persist to disk
         let cfg = AppConfig {
@@ -1187,6 +1349,100 @@ impl MobieWorkspace {
                     _ => rgb(0x44ff88),
                 },
             ))
+            // Sessions Section
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x666688))
+                            .child("SESSIONS"),
+                    )
+                    .child(
+                        div()
+                            .id("sidebar-sessions")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .children(self.sessions.iter().map(|session| {
+                                let is_selected = self.selected_session.as_ref().map(|s| &s.id) == Some(&session.id);
+                                let session_clone = session.clone();
+                                
+                                div()
+                                    .p(px(8.0))
+                                    .mb(px(4.0))
+                                    .rounded(px(6.0))
+                                    .cursor_pointer()
+                                    .when(is_selected, |s| s.bg(rgba(0x4488cc22)))
+                                    .hover(|s| s.bg(rgba(0x4488cc11)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.selected_session = Some(session_clone.clone());
+                                            this.selected_test_case = None;
+                                            
+                                            if let Some(yaml_path) = &session_clone.yaml_path {
+                                                if let Ok(yaml) = std::fs::read_to_string(yaml_path) {
+                                                    if let Ok(mut tc) = serde_yaml::from_str::<crate::yaml_exporter::TestCase>(&yaml) {
+                                                        // Load screenshots from disk if they exist
+                                                        let p = std::path::PathBuf::from(yaml_path);
+                                                        if let Some(stem) = p.file_stem() {
+                                                            if let Some(parent) = p.parent() {
+                                                                let screenshots_dir = parent.join("screenshots").join(stem);
+                                                                for (i, step) in tc.steps.iter_mut().enumerate() {
+                                                                    let name = format!("step_{:02}_{}.png", i + 1, crate::yaml_exporter::slugify(&step.action));
+                                                                    let screenshot_path = screenshots_dir.join(name);
+                                                                    if screenshot_path.exists() {
+                                                                        step.screenshot = std::fs::read(screenshot_path).ok();
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        this.selected_test_case = Some(tc);
+                                                    }
+                                                }
+                                            }
+                                            
+                                            this.current_view = AppView::History;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0x888899))
+                                                    .child(session.timestamp.format("%Y-%m-%d %H:%M").to_string()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(if is_selected { rgb(0xeeeeff) } else { rgb(0xccccdd) })
+                                                    .overflow_hidden()
+                                                    .child(session.goal.clone()),
+                                            )
+                                            .when_some(session.summary.as_ref(), |d, summary| {
+                                                d.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(0x888899))
+                                                        .italic()
+                                                        .child(summary.clone())
+                                                )
+                                            }),
+                                    )
+                            })),
+                    )
+            )
             // Cancel button (only visible when running)
             .when(is_running, |d| {
                 d.child(
@@ -1252,6 +1508,7 @@ impl MobieWorkspace {
                 cx.listener(move |this, _, window, cx| match action {
                     NavTabAction::Chat => this.navigate_chat(&NavigateChat, window, cx),
                     NavTabAction::Settings => this.navigate_settings(&NavigateSettings, window, cx),
+                    NavTabAction::History => this.navigate_history(window, cx),
                 }),
             )
             .child(label.to_string())
@@ -1620,67 +1877,510 @@ impl MobieWorkspace {
     }
 
     // -----------------------------------------------------------------------
+    // History view
+    // -----------------------------------------------------------------------
+
+    fn render_history_panel(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_1()
+            .min_w_0() // Allow container to shrink
+            .h_full()
+            .bg(rgb(0x0a0a1a))
+            .child(match &self.selected_session {
+                Some(session) => self.render_session_detail(session, cx),
+                None => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_color(rgb(0x555566))
+                            .child("Select a session from the sidebar to view details"),
+                    ),
+            })
+    }
+
+    fn render_session_detail(&self, session: &crate::db::Session, cx: &mut Context<Self>) -> Div {
+        let session_id = session.id.clone();
+        let yaml_path = session.yaml_path.clone();
+        let chat_log_path = session.chat_log_path.clone();
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_w_0() // Allow container to shrink
+            .child(
+                div()
+                    .p(px(20.0))
+                    .border_b_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x666688))
+                                    .child(format!("SESSION ID: {}", session.id)),
+                            )
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xeeeeff))
+                                    .overflow_hidden()
+                                    .child(session.goal.clone()),
+                            )
+                            .when_some(session.summary.as_ref(), |d, summary| {
+                                d.child(
+                                    div()
+                                        .text_sm()
+                                        .italic()
+                                        .text_color(rgb(0x888899))
+                                        .child(summary.clone())
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded(px(6.0))
+                                    .bg(rgb(0x2a3a2a))
+                                    .hover(|s| s.bg(rgb(0x3a5a3a)))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let session_id = session.id.clone();
+                                        cx.listener(move |this, _, _, cx| {
+                                            // Handle Reload
+                                            this.reload_session(&session_id, cx);
+                                        })
+                                    })
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0x55ff55))
+                                            .child("Reload Session"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded(px(6.0))
+                                    .bg(rgb(0x3a2a2a))
+                                    .hover(|s| s.bg(rgb(0x5a2a2a)))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                        let session_id = session_id.clone();
+                                let yaml_path = yaml_path.clone();
+                                let chat_log_path = chat_log_path.clone();
+
+                                // 1. Delete associated files
+                                if let Some(path_str) = &yaml_path {
+                                    let path = std::path::Path::new(path_str);
+                                    if path.exists() {
+                                        let _ = std::fs::remove_file(path);
+                                        // Delete screenshots directory: <yaml_dir>/screenshots/<yaml_stem>
+                                        if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) {
+                                            let screenshots_dir = parent.join("screenshots").join(stem);
+                                            if screenshots_dir.exists() {
+                                                let _ = std::fs::remove_dir_all(screenshots_dir);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(path_str) = &chat_log_path {
+                                    let path = std::path::Path::new(path_str);
+                                    if path.exists() {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                }
+
+                                // 2. Update DB and UI State
+                                let db_path = crate::config::db_path();
+                                if let Ok(mgr) = crate::db::SessionManager::new(db_path) {
+                                    let _ = mgr.delete_session(&session_id);
+                                }
+
+                                this.sessions.retain(|s| s.id != session_id);
+                                if this.selected_session.as_ref().map(|s| &s.id) == Some(&session_id) {
+                                    this.selected_session = None;
+                                }
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0xff5555))
+                                    .child("Delete Session"),
+                            ),
+                    ),
+            )
+            )
+            .child(
+                div()
+                    .id("session-detail-scroll")
+                    .flex_1()
+                    .p(px(20.0))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(16.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0x888899))
+                                    .child("METADATA"),
+                            )
+                            .child(
+                                div()
+                                    .bg(rgb(0x16213e))
+                                    .rounded(px(8.0))
+                                    .p(px(12.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.0))
+                                    .min_w_0()
+                                    .child(self.render_detail_item("Timestamp", &session.timestamp.to_rfc3339()))
+                                    .child(self.render_detail_item("Status", &session.status))
+                                    .child(self.render_detail_item("YAML Path", session.yaml_path.as_deref().unwrap_or("None"))),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(20.0))
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0x888899))
+                                    .child("RESULTS"),
+                            )
+                            .child(
+                                div()
+                                    .bg(rgb(0x16213e))
+                                    .rounded(px(8.0))
+                                    .p(px(12.0))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(0xccccdd))
+                                            .overflow_hidden()
+                                            .child(match &session.yaml_path {
+                                                Some(path) => format!("✅ Test case generated and saved to: {}", path),
+                                                None => "No test case generated for this session.".to_string(),
+                                            })
+                                    )
+                            )
+                            .when_some(self.selected_test_case.as_ref(), |this, tc| {
+                                this.child(
+                                    div()
+                                        .mt(px(20.0))
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0x888899))
+                                        .child("EXECUTION TIMELINE"),
+                                )
+                                .child(self.render_execution_timeline(tc, session.yaml_path.as_deref(), cx))
+                            }),
+                    ),
+            )
+    }
+
+    fn render_execution_timeline(&self, tc: &crate::yaml_exporter::TestCase, yaml_path: Option<&str>, cx: &mut Context<Self>) -> Div {
+        // Construct screenshots directory path if available
+        let screenshots_dir = yaml_path.and_then(|p| {
+            let p = std::path::PathBuf::from(p);
+            let stem = p.file_stem()?.to_string_lossy();
+            let parent = p.parent()?;
+            Some(parent.join("screenshots").join(stem.to_string()))
+        });
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .children(tc.steps.iter().enumerate().map(|(i, step)| {
+                let screenshot_path = screenshots_dir.as_ref().and_then(|dir| {
+                    let name = format!("step_{:02}_{}.png", i + 1, crate::yaml_exporter::slugify(&step.action));
+                    let path = dir.join(name);
+                    if path.exists() {
+                        Some(format!("file://{}", path.to_string_lossy()))
+                    } else {
+                        None
+                    }
+                });
+
+                div()
+                    .bg(rgb(0x16213e))
+                    .rounded(px(8.0))
+                    .p(px(12.0))
+                    .flex()
+                    .gap(px(16.0))
+                    .child(
+                        // Left: Step Metadata
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.0))
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .bg(rgb(0xe94560))
+                                            .text_color(rgb(0xffffff))
+                                            .text_xs()
+                                            .font_weight(FontWeight::BOLD)
+                                            .px(px(6.0))
+                                            .py(px(2.0))
+                                            .rounded(px(4.0))
+                                            .child(format!("{}", i + 1)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(0xeeeeff))
+                                            .child(step.action.to_uppercase()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x888899))
+                                    .child(format!("{:?}", step.params)),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(4.0))
+                                    .text_sm()
+                                    .italic()
+                                    .text_color(rgb(0xaaaabb))
+                                    .child(step.reasoning.clone()),
+                            ),
+                    )
+                    .when_some(screenshot_path, |this, path| {
+                        let preview_path = path.clone();
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .w(px(140.0))
+                                        .h(px(240.0))
+                                        .flex_shrink_0()
+                                        .bg(rgb(0x000000))
+                                        .rounded(px(6.0))
+                                        .overflow_hidden()
+                                        .child(
+                                            img(path)
+                                                .size_full()
+                                        )
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .bg(rgb(0xe94560))
+                                        .hover(|s| s.bg(rgb(0xff5c77)))
+                                        .text_color(rgb(0xffffff))
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .py(px(6.0))
+                                        .rounded(px(6.0))
+                                        .flex()
+                                        .justify_center()
+                                        .child("SEE FULL")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.preview_image_path = Some(preview_path.clone());
+                                                this.preview_zoom = 1.0;
+                                                cx.notify();
+                                            }),
+                                        )
+                                )
+                        )
+                    })
+            }))
+    }
+
+    fn render_detail_item(&self, label: &str, value: &str) -> Div {
+        div()
+            .flex()
+            .gap(px(12.0))
+            .min_w_0()
+            .child(
+                div()
+                    .w(px(100.0))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x666688))
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(rgb(0xaaaabb))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(value.to_string()),
+            )
+    }
+
+    // -----------------------------------------------------------------------
+    // Image Preview Overlay
+    // -----------------------------------------------------------------------
+
+    fn render_image_preview(&self, cx: &mut Context<Self>) -> Div {
+        let path = match &self.preview_image_path {
+            Some(p) => p.clone(),
+            None => return div(),
+        };
+
+        div()
+            .absolute()
+            .size_full()
+            .bg(rgba(0x000000dd))
+            .flex()
+            .flex_col()
+            .child(
+                // Toolbar
+                div()
+                    .p(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .cursor_pointer()
+                                    .bg(rgb(0x2a2a4a))
+                                    .text_color(rgb(0xffffff))
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(6.0))
+                                    .child("Zoom -")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.preview_zoom = (this.preview_zoom - 0.2).max(0.2);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(0xaaaabb))
+                                    .child(format!("{:.0}%", self.preview_zoom * 100.0)),
+                            )
+                            .child(
+                                div()
+                                    .cursor_pointer()
+                                    .bg(rgb(0x2a2a4a))
+                                    .text_color(rgb(0xffffff))
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .rounded(px(6.0))
+                                    .child("Zoom +")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.preview_zoom = (this.preview_zoom + 0.2).min(5.0);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .bg(rgb(0xe94560))
+                            .text_color(rgb(0xffffff))
+                            .px(px(12.0))
+                            .py(px(6.0))
+                            .rounded(px(6.0))
+                            .font_weight(FontWeight::BOLD)
+                            .child("Close")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.preview_image_path = None;
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+            )
+            .child(
+                // Image Area
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .id("image-preview-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .overflow_x_scroll()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                img(path)
+                                    .w(px(600.0 * self.preview_zoom))
+                            )
+                    )
+            )
+    }
+
+    // -----------------------------------------------------------------------
     // Settings view
     // -----------------------------------------------------------------------
 
+    /// Renders the LLM configuration panel.
+    ///
+    /// NOTE: We use `flex_col_reverse` on the root container to control the painting order.
+    /// In GPUI, elements rendered later in the code are painted on top of earlier ones.
+    /// By using a reversed column and reversing the child order (Footer -> Body -> Header),
+    /// we ensure that the Body (which contains the model dropdown) is painted AFTER the Footer,
+    /// allowing the dropdown list to correctly overlay the bottom action buttons.
     fn render_settings_panel(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         div()
             .flex_1()
             .h_full()
             .flex()
-            .flex_col()
-            // Header
-            .child(
-                div()
-                    .border_b_1()
-                    .border_color(rgb(0x2a2a4a))
-                    .p(px(16.0))
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xeeeeff))
-                            .child("⚙ LLM Settings (BYOK)"),
-                    ),
-            )
-            // Body
-            .child(
-                div()
-                    .flex_1()
-                    .p(px(24.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(20.0))
-                    .child(self.render_settings_field(
-                        "API Key",
-                        self.settings_api_key.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(self.render_settings_field(
-                        "Model",
-                        self.settings_model.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(self.render_settings_field(
-                        "Base URL",
-                        self.settings_base_url.clone(),
-                        window,
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .p(px(12.0))
-                            .bg(rgb(0x1a3a5c))
-                            .rounded(px(8.0))
-                            .text_xs()
-                            .text_color(rgb(0x8899bb))
-                            .child("💡 Click a field to focus and edit. Press Enter to save."),
-                    ),
-            )
-            // Save button
+            .flex_col_reverse()
+            // Save button (Footer)
             .child(
                 div()
                     .border_t_1()
@@ -1725,6 +2425,188 @@ impl MobieWorkspace {
                             )
                             .child("Cancel"),
                     ),
+            )
+            // Body
+            .child(
+                div()
+                    .flex_1()
+                    .p(px(24.0))
+                    .flex()
+                    .flex_col_reverse()
+                    .gap(px(20.0))
+                    .child(div().flex_1()) // Spacer to push content to the top
+                    .child(
+                        div()
+                            .mt(px(8.0))
+                            .p(px(12.0))
+                            .bg(rgb(0x1a3a5c))
+                            .rounded(px(8.0))
+                            .text_xs()
+                            .text_color(rgb(0x8899bb))
+                            .child("💡 Click a field to focus and edit. Press Enter to save."),
+                    )
+                    .child(self.render_settings_field(
+                        "Base URL",
+                        self.settings_base_url.clone(),
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_model_selection(cx))
+                    .child(self.render_settings_field(
+                        "API Key",
+                        self.settings_api_key.clone(),
+                        window,
+                        cx,
+                    )),
+            )
+            // Header
+            .child(
+                div()
+                    .border_b_1()
+                    .border_color(rgb(0x2a2a4a))
+                    .p(px(16.0))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xeeeeff))
+                            .child("⚙ LLM Settings (BYOK)"),
+                    ),
+            )
+    }
+
+    fn render_model_selection(&self, cx: &mut Context<Self>) -> Div {
+        let selected_model = self.settings_model.read(cx).text().to_string();
+        let is_open = self.model_dropdown_open;
+        let models = self.available_models.clone();
+        let fetching = self.fetching_models;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x666688))
+                    .child("Model"),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        // Selected item box
+                        div()
+                            .bg(rgb(0x16213e))
+                            .border_1()
+                            .border_color(if is_open { rgb(0x4488cc) } else { rgb(0x2a2a4a) })
+                            .rounded(px(6.0))
+                            .px(px(12.0))
+                            .py(px(10.0))
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.model_dropdown_open = !this.model_dropdown_open;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if selected_model.is_empty() {
+                                        rgb(0x555566)
+                                    } else {
+                                        rgb(0xeeeeff)
+                                    })
+                                    .child(if selected_model.is_empty() {
+                                        "Select a model...".to_string()
+                                    } else {
+                                        selected_model.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .ml_2()
+                                    .text_sm()
+                                    .text_color(rgb(0x888899))
+                                    .child(if fetching { "⌛" } else if is_open { "▲" } else { "▼" }),
+                            ),
+                    )
+                    .when(is_open, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .top_full()
+                                .mt_1()
+                                .w_full()
+                                .max_h(px(300.0))
+                                .bg(rgb(0x1a2a4a))
+                                .border_1()
+                                .border_color(rgb(0x4488cc))
+                                .rounded(px(6.0))
+                                .shadow_lg()
+                                .id("model-dropdown-list")
+                                .overflow_y_scroll()
+                                .children(if models.is_empty() {
+                                    vec![div()
+                                        .p(px(12.0))
+                                        .text_xs()
+                                        .text_color(rgb(0x888899))
+                                        .child("No models found. Check your API Key and Base URL.")]
+                                } else {
+                                    models
+                                        .into_iter()
+                                        .map(|model| {
+                                            let model_id = model.id.clone();
+                                            let is_selected = model_id == selected_model;
+                                            
+                                            div()
+                                                .p(px(10.0))
+                                                .cursor_pointer()
+                                                .hover(|s| s.bg(rgb(0x2a3a5c)))
+                                                .when(is_selected, |s| s.bg(rgb(0x3a4a6c)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        this.settings_model.update(cx, |input, cx| {
+                                                            input.set_text(model_id.clone(), cx);
+                                                        });
+                                                        this.model_dropdown_open = false;
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .text_color(if is_selected { rgb(0xffffff) } else { rgb(0xeeeeff) })
+                                                                .child(model.id),
+                                                        )
+                                                        .when_some(model.name, |this, name| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(rgb(0x888899))
+                                                                    .child(name),
+                                                            )
+                                                        }),
+                                                )
+                                        })
+                                        .collect()
+                                }),
+                        )
+                    }),
             )
     }
 
@@ -1818,6 +2700,10 @@ impl Render for MobieWorkspace {
                     .child(self.render_chat_area())
                     .child(self.render_input_area(_window, cx)),
                 AppView::Settings => self.render_settings_panel(_window, cx),
+                AppView::History => self.render_history_panel(cx),
+            })
+            .when(self.preview_image_path.is_some(), |this| {
+                this.child(self.render_image_preview(cx))
             })
     }
 }
