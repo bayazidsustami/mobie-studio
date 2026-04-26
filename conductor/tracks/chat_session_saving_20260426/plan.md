@@ -1,16 +1,16 @@
 # Implementation Plan: Chat Session Saving and Reloading
 
 ## Phase 1: Database Schema and Persistence [checkpoint: ]
-- [ ] Task: Update SQLite schema to include `chat_messages` table and migration in `src/db/mod.rs`.
-    - [ ] Write failing test for `chat_messages` schema creation and insertion.
-    - [ ] Implement `create_chat_messages_table` and `insert_chat_message` to pass the test.
-- [ ] Task: Implement logic to save chat messages during an active session in `src/agent/mod.rs`.
-    - [ ] Write failing test for intercepting and saving messages.
-    - [ ] Modify `AgentEngine` to call `insert_chat_message` on each user prompt and agent response.
-- [ ] Task: Update session deletion logic in `src/db/mod.rs` to cascade and delete associated `chat_messages`.
-    - [ ] Write failing test for cascading deletion.
-    - [ ] Implement the cascading delete logic.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Schema and Persistence' (Protocol in workflow.md)
+- [x] Task: Update SQLite schema to include `chat_messages` table and migration in `src/db/mod.rs`. [8469d7e]
+    - [x] Write failing test for `chat_messages` schema creation and insertion.
+    - [x] Implement `create_chat_messages_table` and `insert_chat_message` to pass the test.
+- [x] Task: Implement logic to save chat messages during an active session in `src/agent/mod.rs`. [8469d7e]
+    - [x] Write failing test for intercepting and saving messages.
+    - [x] Modify `AgentEngine` to call `insert_chat_message` on each user prompt and agent response.
+- [x] Task: Update session deletion logic in `src/db/mod.rs` to cascade and delete associated `chat_messages`. [8469d7e]
+    - [x] Write failing test for cascading deletion.
+    - [x] Implement the cascading delete logic.
+- [~] Task: Conductor - User Manual Verification 'Phase 1: Database Schema and Persistence' (Protocol in workflow.md)
 
 ## Phase 2: Session Metadata and AI Summary [checkpoint: ]
 - [ ] Task: Implement AI summary generation for sessions in `src/agent/mod.rs` or a new module.
