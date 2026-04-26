@@ -13,13 +13,13 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Database Schema and Persistence' (Protocol in workflow.md) [6353d7b]
 
 ## Phase 2: Session Metadata and AI Summary [checkpoint: ]
-- [ ] Task: Implement AI summary generation for sessions in `src/agent/mod.rs` or a new module.
-    - [ ] Write failing test for the summary prompt and logic.
-    - [ ] Add an LLM call at the end of a session to generate a concise summary.
-- [ ] Task: Update the session title logic in `src/ui/mod.rs` to display Date & Time, Initial Goal, and the AI Summary.
-    - [ ] Write failing test/mock test for UI title generation formatting.
-    - [ ] Modify the UI components to construct and render this composite title.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Session Metadata and AI Summary' (Protocol in workflow.md)
+- [x] Task: Implement AI summary generation for sessions in `src/agent/mod.rs` or a new module. [34cff17]
+    - [x] Write failing test for the summary prompt and logic.
+    - [x] Add an LLM call at the end of a session to generate a concise summary.
+- [x] Task: Update the session title logic in `src/ui/mod.rs` to display Date & Time, Initial Goal, and the AI Summary. [34cff17]
+    - [x] Write failing test/mock test for UI title generation formatting.
+    - [x] Modify the UI components to construct and render this composite title.
+- [~] Task: Conductor - User Manual Verification 'Phase 2: Session Metadata and AI Summary' (Protocol in workflow.md)
 
 ## Phase 3: Reload Session UI and Logic [checkpoint: ]
 - [ ] Task: Add "Reload Session" button to the session detail view in `src/ui/mod.rs`.
