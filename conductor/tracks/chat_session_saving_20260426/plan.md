@@ -1,6 +1,6 @@
 # Implementation Plan: Chat Session Saving and Reloading
 
-## Phase 1: Database Schema and Persistence [checkpoint: ]
+## Phase 1: Database Schema and Persistence [checkpoint: 6353d7b]
 - [x] Task: Update SQLite schema to include `chat_messages` table and migration in `src/db/mod.rs`. [8469d7e]
     - [x] Write failing test for `chat_messages` schema creation and insertion.
     - [x] Implement `create_chat_messages_table` and `insert_chat_message` to pass the test.
@@ -10,7 +10,7 @@
 - [x] Task: Update session deletion logic in `src/db/mod.rs` to cascade and delete associated `chat_messages`. [8469d7e]
     - [x] Write failing test for cascading deletion.
     - [x] Implement the cascading delete logic.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: Database Schema and Persistence' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Database Schema and Persistence' (Protocol in workflow.md) [6353d7b]
 
 ## Phase 2: Session Metadata and AI Summary [checkpoint: ]
 - [ ] Task: Implement AI summary generation for sessions in `src/agent/mod.rs` or a new module.
