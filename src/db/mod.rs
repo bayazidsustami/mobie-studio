@@ -14,6 +14,15 @@ pub struct Session {
     pub yaml_path: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ChatMessage {
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: DateTime<Utc>,
+}
+
 pub struct SessionManager {
     conn: Connection,
 }
@@ -30,6 +39,9 @@ impl SessionManager {
         let conn = Connection::open(db_path)
             .context("Failed to open SQLite connection")?;
             
+        conn.execute("PRAGMA foreign_keys = ON;", [])
+            .context("Failed to enable foreign keys")?;
+
         let manager = Self { conn };
         manager.init_schema()?;
         Ok(manager)
@@ -47,6 +59,19 @@ impl SessionManager {
             )",
             [],
         ).context("Failed to initialize database schema")?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+            )",
+            [],
+        ).context("Failed to initialize chat_messages schema")?;
+
         Ok(())
     }
 
@@ -100,6 +125,62 @@ impl SessionManager {
             params![id],
         ).context("Failed to delete session from database")?;
         Ok(())
+    }
+
+    pub fn update_session(&self, session: &Session) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET timestamp = ?2, goal = ?3, status = ?4, chat_log_path = ?5, yaml_path = ?6 WHERE id = ?1",
+            params![
+                session.id,
+                session.timestamp.to_rfc3339(),
+                session.goal,
+                session.status,
+                session.chat_log_path,
+                session.yaml_path,
+            ],
+        ).context("Failed to update session in database")?;
+        Ok(())
+    }
+
+    pub fn insert_chat_message(&self, message: &ChatMessage) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, timestamp)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                message.session_id,
+                message.role,
+                message.content,
+                message.timestamp.to_rfc3339(),
+            ],
+        ).context("Failed to insert chat message into database")?;
+        Ok(())
+    }
+
+    pub fn get_chat_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, timestamp FROM chat_messages WHERE session_id = ?1 ORDER BY timestamp ASC"
+        ).context("Failed to prepare SELECT statement for chat messages")?;
+
+        let message_iter = stmt.query_map(params![session_id], |row| {
+            let timestamp_str: String = row.get(4)?;
+            let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                timestamp,
+            })
+        }).context("Failed to query chat messages")?;
+
+        let mut messages = Vec::new();
+        for message in message_iter {
+            messages.push(message.context("Failed to parse chat message row")?);
+        }
+        Ok(messages)
     }
 }
 
