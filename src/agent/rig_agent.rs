@@ -23,7 +23,7 @@ impl RigAgent {
         }
     }
 
-    fn build_client(&self) -> Result<openai::Client<reqwest::Client>, anyhow::Error> {
+    fn build_client(&self) -> Result<openai::CompletionsClient<reqwest::Client>, anyhow::Error> {
         let api_key = if self.config.api_key.is_empty() {
             "sk-dummy".to_string()
         } else {
@@ -48,7 +48,8 @@ impl RigAgent {
             .api_key(&api_key)
             .base_url(&self.config.base_url)
             .http_client(http_client)
-            .build()?)
+            .build()?
+            .completions_api())
     }
 
     pub async fn think(&self, goal: &str, screenshots: bool) -> Result<String, anyhow::Error> {
@@ -91,7 +92,12 @@ impl RigAgent {
         }
     }
 
-    pub async fn generate_summary(&self, goal: &str, history: &[TestStep], final_res: &str) -> Result<String, anyhow::Error> {
+    pub async fn generate_summary(
+        &self,
+        goal: &str,
+        history: &[TestStep],
+        final_res: &str,
+    ) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
 
         let agent = client
@@ -101,7 +107,10 @@ impl RigAgent {
 
         let mut content = format!("Goal: {}\n\nSteps:\n", goal);
         for step in history {
-            content.push_str(&format!("- Action: {}, Reasoning: {}\n", step.action, step.reasoning));
+            content.push_str(&format!(
+                "- Action: {}, Reasoning: {}\n",
+                step.action, step.reasoning
+            ));
         }
         content.push_str(&format!("\nFinal Result: {}", final_res));
 
