@@ -21,15 +21,15 @@ Implement a "Clear All" button in the chat header that deletes all session histo
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Backend Deletion Logic' (Protocol in workflow.md)
 
 ### Phase 2: UI Implementation
-- [ ] Task: Add "Clear All" button to the Chat Header in `src/ui/mod.rs`
-    - [ ] Style the button according to GPUI conventions.
-    - [ ] Connect button to an asynchronous action.
-- [ ] Task: Implement Empty State View in `src/ui/mod.rs`
-    - [ ] Create a reusable `render_empty_state` function.
-    - [ ] Add "Start New Session" button to the empty state.
-- [ ] Task: Update Sidebar and View Refresh Logic
-    - [ ] Ensure the sidebar list clears immediately after the action.
-    - [ ] Handle transition from active session to empty state.
+- [x] Task: Add "Clear All" button to the Chat Header in `src/ui/mod.rs`
+    - [x] Style the button according to GPUI conventions.
+    - [x] Connect button to an asynchronous action.
+- [x] Task: Implement Empty State View in `src/ui/mod.rs`
+    - [x] Create a reusable `render_empty_state` function.
+    - [x] Add "Start New Session" button to the empty state.
+- [x] Task: Update Sidebar and View Refresh Logic
+    - [x] Ensure the sidebar list clears immediately after the action.
+    - [x] Handle transition from active session to empty state.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: UI Implementation' (Protocol in workflow.md)
 
 ### Phase 3: Integration & Final Polish

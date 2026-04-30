@@ -38,6 +38,8 @@ pub enum AgentMessage {
     RetestScenario(std::path::PathBuf),
     /// Fetch available models from the provider.
     FetchModels(String, String),
+    /// Clear all session history and artifacts.
+    ClearAllHistory,
 }
 
 /// Updates the Agent Engine sends **back to** the UI.
@@ -51,6 +53,8 @@ pub enum AgentUpdate {
     TestGenerated(std::path::PathBuf),
     /// Emitted when a session is saved to the database.
     SessionSaved,
+    /// Emitted when the entire history is cleared.
+    HistoryCleared,
     /// Successfully fetched available models.
     ModelsFetched(Vec<crate::llm::ModelData>),
     /// Failed to fetch available models.
@@ -452,6 +456,19 @@ impl AgentEngine {
                             }
                         }
                     });
+                }
+
+                AgentMessage::ClearAllHistory => {
+                    info!("Clearing all session history and artifacts.");
+                    if let Some(ref mgr) = session_manager {
+                        if let Err(e) = mgr.clear_all_sessions() {
+                            error!("Failed to clear sessions in DB: {}", e);
+                        }
+                    }
+                    if let Err(e) = crate::yaml_exporter::clear_all_artifacts() {
+                        error!("Failed to clear artifacts on disk: {}", e);
+                    }
+                    let _ = update_tx.send(AgentUpdate::HistoryCleared).await;
                 }
             }
         }

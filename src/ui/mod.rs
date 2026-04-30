@@ -13,12 +13,12 @@ use crate::llm::LlmConfig;
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
-
 actions!(
     mobie,
     [
         SendMessage,
         CancelGoal,
+        ClearAll,
         NavigateSettings,
         NavigateChat,
         RefreshDevices,
@@ -1042,6 +1042,17 @@ impl MobieWorkspace {
                                     }
                                 }
                             }
+                            AgentUpdate::HistoryCleared => {
+                                workspace.sessions.clear();
+                                workspace.messages = vec![ChatMessage {
+                                    role: ChatRole::System,
+                                    content: "Welcome to Mobie Studio! Type a goal and press Enter.".to_string(),
+                                }];
+                                workspace.selected_session = None;
+                                workspace.selected_test_case = None;
+                                workspace.latest_test = None;
+                                workspace.current_view = AppView::Chat;
+                            }
                             AgentUpdate::ModelsFetched(models) => {
                                 workspace.available_models = models;
                                 workspace.fetching_models = false;
@@ -1172,6 +1183,15 @@ impl MobieWorkspace {
         let tx = self.cmd_tx.clone();
         cx.spawn(async move |_, _| {
             let _ = tx.send(AgentMessage::Stop).await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn clear_all(&mut self, _: &ClearAll, _window: &mut Window, cx: &mut Context<Self>) {
+        let tx = self.cmd_tx.clone();
+        cx.spawn(async move |_, _| {
+            let _ = tx.send(AgentMessage::ClearAllHistory).await;
         })
         .detach();
         cx.notify();
@@ -1759,7 +1779,11 @@ impl MobieWorkspace {
     // Chat view
     // -----------------------------------------------------------------------
 
-    fn render_chat_area(&self) -> Div {
+    fn render_chat_area(&self, cx: &mut Context<Self>) -> Div {
+        if self.sessions.is_empty() {
+            return self.render_empty_state(cx);
+        }
+
         div()
             .flex_1()
             .min_h_0() // Critical for scrolling in flex layouts
@@ -2251,6 +2275,56 @@ impl MobieWorkspace {
             )
     }
 
+    fn render_empty_state(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(20.0))
+            .child(
+                div()
+                    .text_3xl()
+                    .child("📱"),
+            )
+            .child(
+                div()
+                    .text_lg()
+                    .text_color(rgb(0x888899))
+                    .child("No active sessions"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0x666677))
+                    .child("Start a new exploratory session to begin testing"),
+            )
+            .child(
+                div()
+                    .px_6()
+                    .py_3()
+                    .bg(rgb(0xe94560))
+                    .hover(|s| s.bg(rgb(0xff5c77)))
+                    .rounded(px(12.0))
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xffffff))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.navigate_chat(&NavigateChat, window, cx);
+                            this.chat_input.update(cx, |input, cx| {
+                                input.focus_handle.focus(window);
+                                cx.notify();
+                            });
+                        }),
+                    )
+                    .child("Start New Session"),
+            )
+    }
+
     // -----------------------------------------------------------------------
     // Image Preview Overlay
     // -----------------------------------------------------------------------
@@ -2695,9 +2769,25 @@ impl Render for MobieWorkspace {
                                         }),
                                     )
                                     .child("⚙ Settings"),
+                            )
+                            .child(
+                                // Clear All button in header
+                                div()
+                                    .ml_4()
+                                    .text_xs()
+                                    .text_color(rgb(0xff5555))
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(rgb(0xff8888)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.clear_all(&ClearAll, window, cx);
+                                        }),
+                                    )
+                                    .child("🗑 Clear All"),
                             ),
                     )
-                    .child(self.render_chat_area())
+                    .child(self.render_chat_area(cx))
                     .child(self.render_input_area(_window, cx)),
                 AppView::Settings => self.render_settings_panel(_window, cx),
                 AppView::History => self.render_history_panel(cx),
