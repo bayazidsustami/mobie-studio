@@ -30,11 +30,11 @@ Implement a "Clear All" button in the chat header that deletes all session histo
 - [x] Task: Update Sidebar and View Refresh Logic
     - [x] Ensure the sidebar list clears immediately after the action.
     - [x] Handle transition from active session to empty state.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: UI Implementation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: UI Implementation' (Protocol in workflow.md)
 
-### Phase 3: Integration & Final Polish
+### Phase 3: Integration & Final Polish [checkpoint: e8f3760]
 - [x] Task: End-to-end Integration Test
     - [x] Create a test that populates multiple sessions, triggers "Clear All", and verifies disk/DB state.
 - [x] Task: Final UI/UX Polish
     - [x] Verify alignment and responsive behavior.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Integration & Final Polish' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Integration & Final Polish' (Protocol in workflow.md)

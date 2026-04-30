@@ -34,5 +34,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: Create a button in chat page to clear up all chats**
+- [x] **Track: Create a button in chat page to clear up all chats**
 *Link: [./tracks/clear_all_chats_20260430/](./tracks/clear_all_chats_20260430/)*
