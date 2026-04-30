@@ -11,14 +11,14 @@ Implement a "Clear All" button in the chat header that deletes all session histo
 
 ## Phases
 
-### Phase 1: Backend Deletion Logic
+### Phase 1: Backend Deletion Logic [checkpoint: 455eb3a]
 - [x] Task: Implement `clear_all_sessions` in `src/db/mod.rs`
     - [x] Create unit test in `tests/chat_db_persistence.rs` for mass deletion.
     - [x] Implement SQL `DELETE FROM sessions` logic.
 - [x] Task: Implement artifact cleanup in `src/yaml_exporter.rs`
     - [x] Create unit test for clearing the export directory.
     - [x] Implement logic to delete all `.yaml` files and `screenshots/` subdirectories.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Backend Deletion Logic' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Backend Deletion Logic' (Protocol in workflow.md)
 
 ### Phase 2: UI Implementation
 - [ ] Task: Add "Clear All" button to the Chat Header in `src/ui/mod.rs`
