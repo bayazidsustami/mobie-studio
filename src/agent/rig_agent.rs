@@ -71,7 +71,7 @@ impl RigAgent {
             .build();
 
         // Use max_turns to allow the agent to iterate
-        match agent.prompt(goal).max_turns(20).await {
+        match agent.prompt(goal).max_turns(50).await {
             Ok(res) => Ok(res),
             Err(e) => Err(anyhow::anyhow!("Rig agent think failed: {}", e)),
         }
