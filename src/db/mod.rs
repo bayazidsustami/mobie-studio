@@ -134,6 +134,14 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn clear_all_sessions(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM sessions",
+            [],
+        ).context("Failed to clear all sessions from database")?;
+        Ok(())
+    }
+
     pub fn update_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET timestamp = ?2, goal = ?3, status = ?4, summary = ?5, chat_log_path = ?6, yaml_path = ?7 WHERE id = ?1",
@@ -223,6 +231,34 @@ mod tests {
         assert_eq!(sessions[0].timestamp.to_rfc3339(), session.timestamp.to_rfc3339());
 
         manager.delete_session(&session.id)?;
+        let sessions = manager.get_all_sessions()?;
+        assert_eq!(sessions.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_clear_all_sessions() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("test_clear_all.db");
+        let manager = SessionManager::new(db_path)?;
+
+        for i in 1..=3 {
+            manager.insert_session(&Session {
+                id: format!("id-{}", i),
+                timestamp: Utc::now(),
+                goal: format!("Goal {}", i),
+                status: "success".to_string(),
+                summary: None,
+                chat_log_path: None,
+                yaml_path: None,
+            })?;
+        }
+
+        let sessions = manager.get_all_sessions()?;
+        assert_eq!(sessions.len(), 3);
+
+        manager.clear_all_sessions()?;
         let sessions = manager.get_all_sessions()?;
         assert_eq!(sessions.len(), 0);
 

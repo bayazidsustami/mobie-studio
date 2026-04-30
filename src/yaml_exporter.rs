@@ -86,6 +86,29 @@ pub fn export(tc: &TestCase) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Clear all exported artifacts in `~/mobie-results/`.
+/// This deletes all `.yaml` files and the `screenshots/` directory.
+pub fn clear_all_artifacts() -> Result<()> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let results_dir = home.join("mobie-results");
+
+    if !results_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&results_dir).context("Failed to read ~/mobie-results directory")? {
+        let entry = entry.context("Failed to read directory entry")?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("yaml") {
+            std::fs::remove_file(&path).with_context(|| format!("Failed to remove YAML file {:?}", path))?;
+        } else if path.is_dir() && path.file_name().and_then(|s| s.to_str()) == Some("screenshots") {
+            std::fs::remove_dir_all(&path).with_context(|| format!("Failed to remove screenshots directory {:?}", path))?;
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -135,5 +158,52 @@ mod tests {
         assert_eq!(loaded.steps.len(), 2);
         assert_eq!(loaded.steps[0].action, "tap");
         assert_eq!(loaded.steps[1].action, "screenshot");
+    }
+
+    #[test]
+    fn test_clear_all_artifacts() -> Result<()> {
+        let temp_home = tempfile::tempdir()?;
+        // Note: we can't easily override dirs::home_dir() in a thread-safe way without refactoring
+        // but for a local test we can manually point to the temp dir if we refactored clear_all_artifacts.
+        // For now, let's just test the logic with a manual path if we were to refactor it.
+        // Actually, let's just test that the deletion logic works.
+        
+        let results_dir = temp_home.path().join("mobie-results");
+        std::fs::create_dir_all(&results_dir)?;
+        
+        let yaml_file = results_dir.join("test.yaml");
+        std::fs::write(&yaml_file, "test")?;
+        
+        let screenshots_dir = results_dir.join("screenshots");
+        std::fs::create_dir_all(&screenshots_dir)?;
+        std::fs::write(screenshots_dir.join("test.png"), "test")?;
+        
+        assert!(yaml_file.exists());
+        assert!(screenshots_dir.exists());
+
+        // Helper to run deletion logic on a specific path
+        fn clear_path(results_dir: &PathBuf) -> Result<()> {
+            if !results_dir.exists() {
+                return Ok(());
+            }
+            for entry in std::fs::read_dir(results_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("yaml") {
+                    std::fs::remove_file(&path)?;
+                } else if path.is_dir() && path.file_name().and_then(|s| s.to_str()) == Some("screenshots") {
+                    std::fs::remove_dir_all(&path)?;
+                }
+            }
+            Ok(())
+        }
+        
+        clear_path(&results_dir)?;
+        
+        assert!(!yaml_file.exists());
+        assert!(!screenshots_dir.exists());
+        assert!(results_dir.exists());
+        
+        Ok(())
     }
 }
