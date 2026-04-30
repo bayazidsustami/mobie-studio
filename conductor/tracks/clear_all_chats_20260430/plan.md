@@ -33,8 +33,8 @@ Implement a "Clear All" button in the chat header that deletes all session histo
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: UI Implementation' (Protocol in workflow.md)
 
 ### Phase 3: Integration & Final Polish
-- [ ] Task: End-to-end Integration Test
-    - [ ] Create a test that populates multiple sessions, triggers "Clear All", and verifies disk/DB state.
-- [ ] Task: Final UI/UX Polish
-    - [ ] Verify alignment and responsive behavior.
+- [x] Task: End-to-end Integration Test
+    - [x] Create a test that populates multiple sessions, triggers "Clear All", and verifies disk/DB state.
+- [x] Task: Final UI/UX Polish
+    - [x] Verify alignment and responsive behavior.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Integration & Final Polish' (Protocol in workflow.md)
