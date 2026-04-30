@@ -1,8 +1,0 @@
-{
-  "track_id": "clear_all_chats_20260430",
-  "type": "feature",
-  "status": "new",
-  "created_at": "2026-04-30T10:00:00Z",
-  "updated_at": "2026-04-30T10:00:00Z",
-  "description": "Create a button in chat page to clear up all chats."
-}

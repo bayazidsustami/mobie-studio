@@ -1780,7 +1780,7 @@ impl MobieWorkspace {
     // -----------------------------------------------------------------------
 
     fn render_chat_area(&self, cx: &mut Context<Self>) -> Div {
-        if self.sessions.is_empty() {
+        if self.sessions.is_empty() && self.messages.len() <= 1 {
             return self.render_empty_state(cx);
         }
 
