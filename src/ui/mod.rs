@@ -2315,10 +2315,9 @@ impl MobieWorkspace {
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
                             this.navigate_chat(&NavigateChat, window, cx);
-                            this.chat_input.update(cx, |input, cx| {
-                                input.focus_handle.focus(window);
-                                cx.notify();
-                            });
+                            let handle = this.chat_input.read(cx).focus_handle.clone();
+                            handle.focus(window);
+                            cx.notify();
                         }),
                     )
                     .child("Start New Session"),
@@ -2755,20 +2754,6 @@ impl Render for MobieWorkspace {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(0xeeeeff))
                                     .child("💬 Exploratory Session"),
-                            )
-                            .child(
-                                // Settings link in header
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x4488cc))
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.navigate_settings(&NavigateSettings, window, cx);
-                                        }),
-                                    )
-                                    .child("⚙ Settings"),
                             )
                             .child(
                                 // Clear All button in header
