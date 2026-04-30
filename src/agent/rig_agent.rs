@@ -23,7 +23,7 @@ impl RigAgent {
         }
     }
 
-    fn build_client(&self) -> Result<openai::CompletionsClient<reqwest::Client>, anyhow::Error> {
+    fn build_client(&self) -> Result<openai::Client<reqwest::Client>, anyhow::Error> {
         let api_key = if self.config.api_key.is_empty() {
             "sk-dummy".to_string()
         } else {
@@ -48,8 +48,7 @@ impl RigAgent {
             .api_key(&api_key)
             .base_url(&self.config.base_url)
             .http_client(http_client)
-            .build()?
-            .completions_api())
+            .build()?)
     }
 
     pub async fn think(&self, goal: &str, screenshots: bool) -> Result<String, anyhow::Error> {
