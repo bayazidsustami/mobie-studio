@@ -18,6 +18,7 @@ fn test_chat_message_persistence() -> Result<()> {
         summary: None,
         chat_log_path: None,
         yaml_path: None,
+        rig_history_json: None,
     };
     manager.insert_session(&session)?;
 

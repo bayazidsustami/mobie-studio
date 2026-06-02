@@ -2,9 +2,9 @@ use gpui::*;
 use mobie::agent::AgentEngine;
 use mobie::config::load_config;
 use mobie::ui::{
-    Backspace, CancelGoal, Copy, Cut, Delete, MobieWorkspace, MoveEnd, MoveHome, MoveLeft,
-    MoveRight, Paste, SaveSettings, SelectAll, SelectEnd, SelectHome, SelectLeft, SelectRight,
-    SendMessage,
+    Backspace, CancelGoal, Copy, Cut, Delete, EndSession, MobieWorkspace, MoveEnd, MoveHome,
+    MoveLeft, MoveRight, NewSession, Paste, SaveSettings, SelectAll, SelectEnd, SelectHome,
+    SelectLeft, SelectRight, SendMessage,
 };
 use tracing::info;
 
@@ -62,6 +62,10 @@ fn main() {
             KeyBinding::new("ctrl-v", Paste, None),
             KeyBinding::new("cmd-s", SaveSettings, None),
             KeyBinding::new("ctrl-s", SaveSettings, None),
+            KeyBinding::new("cmd-n", NewSession, None),
+            KeyBinding::new("ctrl-n", NewSession, None),
+            KeyBinding::new("cmd-shift-e", EndSession, None),
+            KeyBinding::new("ctrl-shift-e", EndSession, None),
         ]);
 
         let config_for_window = initial_config.clone();

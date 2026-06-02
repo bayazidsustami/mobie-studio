@@ -65,25 +65,88 @@ pub fn export(tc: &TestCase) -> Result<PathBuf> {
     let filename = format!("{}-{}.yaml", slug, now);
     let path = results_dir.join(&filename);
 
-    // Create screenshots directory if needed
-    if tc.screenshots {
-        let screenshots_dir = results_dir.join("screenshots").join(format!("{}-{}", slug, now));
+    write_to_path(tc, &path, &slug, now)
+}
+
+/// Export a `TestCase` to a **stable, caller-chosen** path.
+/// Used for multi-turn sessions where the same file is rewritten after each turn.
+/// `slug` and `timestamp_secs` are used to derive a stable screenshots dir name.
+pub fn export_to_path(tc: &TestCase, path: &std::path::Path) -> Result<()> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let results_dir = home.join("mobie-results");
+    std::fs::create_dir_all(&results_dir).context("Failed to create ~/mobie-results directory")?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create parent directory for YAML")?;
+    }
+
+    let slug = slugify(&tc.goal);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Always write screenshots if any step has one. Screenshot dir is derived
+    // from the parent directory name so consecutive rewrites overwrite the
+    // same screenshot set.
+    let has_screenshots = tc.steps.iter().any(|s| s.screenshot.is_some());
+    if has_screenshots {
+        let screenshots_dir = results_dir
+            .join("screenshots")
+            .join(path.file_stem().and_then(|s| s.to_str()).unwrap_or("session"));
         std::fs::create_dir_all(&screenshots_dir).context("Failed to create screenshots directory")?;
 
         for (i, step) in tc.steps.iter().enumerate() {
             if let Some(data) = &step.screenshot {
                 let screenshot_name = format!("step_{:02}_{}.png", i + 1, slugify(&step.action));
                 let screenshot_path = screenshots_dir.join(screenshot_name);
-                std::fs::write(&screenshot_path, data).with_context(|| format!("Failed to write screenshot to {:?}", screenshot_path))?;
+                std::fs::write(&screenshot_path, data)
+                    .with_context(|| format!("Failed to write screenshot to {:?}", screenshot_path))?;
             }
         }
     }
 
     let yaml = serde_yaml::to_string(tc).context("Failed to serialize TestCase to YAML")?;
-    std::fs::write(&path, yaml).with_context(|| format!("Failed to write YAML to {:?}", path))?;
+    std::fs::write(path, yaml)
+        .with_context(|| format!("Failed to write YAML to {:?}", path))?;
 
     info!("Exported test case to {:?}", path);
-    Ok(path)
+    let _ = (slug, now); // currently unused in this path
+    Ok(())
+}
+
+/// Helper used by `export`. Kept private to avoid duplication.
+fn write_to_path(
+    tc: &TestCase,
+    path: &std::path::Path,
+    slug: &str,
+    timestamp_secs: u64,
+) -> Result<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let results_dir = home.join("mobie-results");
+
+    if tc.screenshots {
+        let screenshots_dir = results_dir
+            .join("screenshots")
+            .join(format!("{}-{}", slug, timestamp_secs));
+        std::fs::create_dir_all(&screenshots_dir).context("Failed to create screenshots directory")?;
+
+        for (i, step) in tc.steps.iter().enumerate() {
+            if let Some(data) = &step.screenshot {
+                let screenshot_name = format!("step_{:02}_{}.png", i + 1, slugify(&step.action));
+                let screenshot_path = screenshots_dir.join(screenshot_name);
+                std::fs::write(&screenshot_path, data)
+                    .with_context(|| format!("Failed to write screenshot to {:?}", screenshot_path))?;
+            }
+        }
+    }
+
+    let yaml = serde_yaml::to_string(tc).context("Failed to serialize TestCase to YAML")?;
+    std::fs::write(path, yaml)
+        .with_context(|| format!("Failed to write YAML to {:?}", path))?;
+
+    info!("Exported test case to {:?}", path);
+    Ok(path.to_path_buf())
 }
 
 /// Clear all exported artifacts in `~/mobie-results/`.
@@ -164,20 +227,20 @@ mod tests {
     fn test_clear_all_artifacts() -> Result<()> {
         let temp_home = tempfile::tempdir()?;
         // Note: we can't easily override dirs::home_dir() in a thread-safe way without refactoring
-        // but for a local test we can manually point to the temp dir if we refactored clear_all_artifacts.
+        // but for a local test we can manually point to the temp dir if we were to refactor clear_all_artifacts.
         // For now, let's just test the logic with a manual path if we were to refactor it.
         // Actually, let's just test that the deletion logic works.
-        
+
         let results_dir = temp_home.path().join("mobie-results");
         std::fs::create_dir_all(&results_dir)?;
-        
+
         let yaml_file = results_dir.join("test.yaml");
         std::fs::write(&yaml_file, "test")?;
-        
+
         let screenshots_dir = results_dir.join("screenshots");
         std::fs::create_dir_all(&screenshots_dir)?;
         std::fs::write(screenshots_dir.join("test.png"), "test")?;
-        
+
         assert!(yaml_file.exists());
         assert!(screenshots_dir.exists());
 
@@ -197,13 +260,74 @@ mod tests {
             }
             Ok(())
         }
-        
+
         clear_path(&results_dir)?;
-        
+
         assert!(!yaml_file.exists());
         assert!(!screenshots_dir.exists());
         assert!(results_dir.exists());
-        
+
+        Ok(())
+    }
+
+    /// Verifies that `export_to_path` writes a TestCase to a stable
+    /// caller-chosen path. The same path can be overwritten across turns
+    /// in a multi-turn session, and the file content reflects the latest
+    /// step history.
+    #[test]
+    fn test_export_to_path_overwrites() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("sess_test.yaml");
+
+        // First turn: one step
+        let mut params1 = HashMap::new();
+        params1.insert("x".to_string(), serde_json::json!(100));
+        params1.insert("y".to_string(), serde_json::json!(200));
+
+        let tc1 = TestCase {
+            goal: "open settings".to_string(),
+            screenshots: false,
+            steps: vec![TestStep {
+                action: "tap".to_string(),
+                params: params1.clone(),
+                reasoning: "tap settings icon".to_string(),
+                screenshot: None,
+            }],
+            success: true,
+        };
+        export_to_path(&tc1, &target)?;
+        let yaml1 = std::fs::read_to_string(&target)?;
+        assert!(yaml1.contains("tap"));
+        assert!(yaml1.contains("open settings"));
+
+        // Second turn: two steps. Overwrite the same file.
+        let tc2 = TestCase {
+            goal: "open settings".to_string(),
+            screenshots: false,
+            steps: vec![
+                TestStep {
+                    action: "tap".to_string(),
+                    params: params1.clone(),
+                    reasoning: "tap settings icon".to_string(),
+                    screenshot: None,
+                },
+                TestStep {
+                    action: "input".to_string(),
+                    params: HashMap::new(),
+                    reasoning: "type username".to_string(),
+                    screenshot: None,
+                },
+            ],
+            success: true,
+        };
+        export_to_path(&tc2, &target)?;
+        let yaml2 = std::fs::read_to_string(&target)?;
+        assert!(yaml2.contains("tap"));
+        assert!(yaml2.contains("input"));
+        // Should reflect the latest turn, not be appended.
+        assert_eq!(yaml2.matches("action:").count(), 2);
+
         Ok(())
     }
 }
+

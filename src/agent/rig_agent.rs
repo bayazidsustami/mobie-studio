@@ -4,14 +4,13 @@ use crate::llm::LlmConfig;
 use crate::yaml_exporter::TestStep;
 use reqwest::header::{HeaderMap, HeaderValue};
 use rig::client::CompletionClient;
-use rig::completion::Prompt;
+use rig::completion::{Message, Prompt};
 use rig::providers::openai;
 use std::sync::{Arc, Mutex};
 
 pub struct RigAgent {
     config: LlmConfig,
     device: Arc<DeviceBridge>,
-    pub history: Arc<Mutex<Vec<TestStep>>>,
 }
 
 impl RigAgent {
@@ -19,7 +18,6 @@ impl RigAgent {
         Self {
             config,
             device: Arc::new(device),
-            history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -51,26 +49,37 @@ impl RigAgent {
             .build()?)
     }
 
-    pub async fn think(&self, goal: &str, screenshots: bool) -> Result<String, anyhow::Error> {
+    /// Run a multi-turn agent invocation.
+    ///
+    /// `goal` is the **already-composed** user prompt (typically the engine
+    /// prepends an auto-observation of the current screen before calling us).
+    /// `history` is the accumulated LLM conversation (`Vec<rig::completion::Message>`).
+    /// After this returns, `history` contains the new turn appended (so the
+    /// caller can persist it). `step_history` is the per-session `TestStep`
+    /// accumulator shared with the device tools.
+    pub async fn think(
+        &self,
+        goal: &str,
+        screenshots: bool,
+        history: &mut Vec<Message>,
+        step_history: Arc<Mutex<Vec<TestStep>>>,
+    ) -> Result<String, anyhow::Error> {
         let client = self.build_client()?;
 
-        // Clear history before starting a new session/goal
-        if let Ok(mut h) = self.history.lock() {
-            h.clear();
-        }
-
-        let agent = client.agent(&self.config.model)
-            .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning.")
-            .tool(Tap { device: self.device.clone(), history: self.history.clone(), screenshots })
-            .tool(Input { device: self.device.clone(), history: self.history.clone(), screenshots })
-            .tool(Swipe { device: self.device.clone(), history: self.history.clone(), screenshots })
-            .tool(KeyEvent { device: self.device.clone(), history: self.history.clone(), screenshots })
-            .tool(Observe { device: self.device.clone(), history: self.history.clone() })
-            .tool(Screenshot { device: self.device.clone(), history: self.history.clone() })
+        let agent = client
+            .agent(&self.config.model)
+            .preamble("You are a mobile testing agent. Use tools to interact with the device and achieve the goal. Always explain your reasoning. You have access to the full prior conversation - if the user has already told you what to do, refer to that context rather than re-asking.")
+            .tool(Tap { device: self.device.clone(), history: step_history.clone(), screenshots })
+            .tool(Input { device: self.device.clone(), history: step_history.clone(), screenshots })
+            .tool(Swipe { device: self.device.clone(), history: step_history.clone(), screenshots })
+            .tool(KeyEvent { device: self.device.clone(), history: step_history.clone(), screenshots })
+            .tool(Observe { device: self.device.clone(), history: step_history.clone() })
+            .tool(Screenshot { device: self.device.clone(), history: step_history.clone(), screenshots })
             .build();
 
-        // Use max_turns to allow the agent to iterate
-        match agent.prompt(goal).max_turns(50).await {
+        // `with_history` mutates `history` in place, appending the new
+        // user prompt + all tool calls + the final assistant reply.
+        match agent.prompt(goal).with_history(history).max_turns(50).await {
             Ok(res) => Ok(res),
             Err(e) => Err(anyhow::anyhow!("Rig agent think failed: {}", e)),
         }
@@ -138,5 +147,18 @@ mod tests {
         let agent = RigAgent::new(config, device);
         let response = agent.prompt("Hello").await;
         assert!(response.is_ok() || response.is_err());
+    }
+
+    /// Smoke test for the multi-turn `think()` signature: ensures the function
+    /// compiles and accepts the new `&mut Vec<Message>` + `Arc<Mutex<Vec<TestStep>>>`
+    /// parameters. Does not hit a real LLM.
+    #[test]
+    fn test_think_signature_compiles() {
+        // We don't call think() because that would require a real LLM. The
+        // signature itself is exercised at compile time by every caller.
+        // This test just asserts the imports are in scope.
+        let _ = std::marker::PhantomData::<RigAgent>;
+        let _: Vec<Message> = Vec::new();
+        let _: Arc<Mutex<Vec<TestStep>>> = Arc::new(Mutex::new(Vec::new()));
     }
 }

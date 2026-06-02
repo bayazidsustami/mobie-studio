@@ -1,12 +1,40 @@
+use chrono::{DateTime, Utc};
+use rig::completion::Message;
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::device::{DeviceBridge, DeviceStatus};
+use crate::device::{compress_xml, DeviceBridge, DeviceStatus};
 use crate::llm::LlmConfig;
 
 pub mod action;
 pub mod rig_agent;
 pub mod tools;
+
+/// Active session state held in the engine between turns. Persisted to
+/// `sessions.rig_history_json` after each successful turn.
+#[derive(Debug, Clone)]
+struct ActiveSession {
+    id: String,
+    goal: String,
+    created_at: DateTime<Utc>,
+    rig_history: Vec<Message>,
+    step_history: Arc<Mutex<Vec<crate::yaml_exporter::TestStep>>>,
+    yaml_path: Option<String>,
+    screenshots: bool,
+}
+
+/// State of a session after the engine finishes processing it. Used by tests
+/// to assert the lifecycle end-to-end.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionState {
+    pub id: String,
+    pub status: String,
+    pub yaml_path: Option<String>,
+    pub turn_count: usize,
+    pub step_count: usize,
+}
 
 /// High-level status for the UI.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,10 +48,20 @@ pub enum AgentStatus {
 /// Messages the UI sends **to** the Agent Engine.
 #[derive(Debug, Clone)]
 pub enum AgentMessage {
-    /// Start a new goal (exploratory run) with optional screenshot toggle.
+    /// Send a user prompt. Continues the active session if one is open,
+    /// otherwise mints a new `session_id` and starts fresh.
     StartGoal(String, bool),
     /// Cancel the current goal.
     Stop,
+    /// Finalize the current session (write final YAML, mark completed) and
+    /// clear the active session. The next `StartGoal` will mint a new one.
+    EndSession,
+    /// Discard the current session and start a new one. Equivalent to
+    /// `EndSession` followed by an implicit "create on next send".
+    NewSession,
+    /// Switch the engine to a different existing session, loading its
+    /// `rig_history_json` from the database.
+    SwitchSession(String),
     /// Update LLM configuration (API key, model, etc.) at runtime.
     UpdateConfig(LlmConfig),
     /// Select a specific ADB device by serial ID.
@@ -59,6 +97,10 @@ pub enum AgentUpdate {
     ModelsFetched(Vec<crate::llm::ModelData>),
     /// Failed to fetch available models.
     ModelsFetchFailed(String),
+    /// Emitted when the active session changes (new, switched, ended).
+    ActiveSessionChanged(Option<String>),
+    /// Snapshot of session state for the status bar / UI.
+    SessionStateUpdate(SessionState),
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +128,7 @@ impl AgentEngine {
     ) {
         info!("Agent Engine loop started.");
         let mut device = DeviceBridge::new();
-        
+
         let db_path = crate::config::db_path();
         let session_manager = crate::db::SessionManager::new(db_path).ok();
 
@@ -98,6 +140,10 @@ impl AgentEngine {
         };
 
         let mut rig_agent = rig_agent::RigAgent::new(config.clone(), device.clone());
+
+        // The active multi-turn session, if any. Persisted across consecutive
+        // `StartGoal` messages so the LLM retains full prior context.
+        let mut active: Option<ActiveSession> = None;
 
         // Initial device refresh
         Self::refresh_devices(&device, &update_tx).await;
@@ -126,14 +172,12 @@ impl AgentEngine {
                         error!("Failed to launch emulator {}: {}", name, e);
                     }
 
-                    // Poll for status changes in a separate task so we don't block the command loop
                     let device_clone = device.clone();
                     let update_tx_clone = update_tx.clone();
                     let name_clone = name.clone();
 
                     tokio::spawn(async move {
                         info!("Polling status for launched emulator: {}", name_clone);
-                        // Poll every 2 seconds for up to 2 minutes
                         for _ in 0..60 {
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                             Self::refresh_devices(&device_clone, &update_tx_clone).await;
@@ -152,7 +196,6 @@ impl AgentEngine {
                     info!("Stopping emulator: {}", id_or_name);
                     let mut serial = Some(id_or_name.clone());
 
-                    // If it's not a serial, try to find the serial for this AVD name
                     if !id_or_name.starts_with("emulator-") {
                         if let Ok(Some(s)) = device.find_serial_for_avd(&id_or_name).await {
                             serial = Some(s);
@@ -172,7 +215,7 @@ impl AgentEngine {
                 }
 
                 AgentMessage::Stop => {
-                    info!("Stopping Agent.");
+                    info!("Stopping current goal (keeping session open).");
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
@@ -181,27 +224,122 @@ impl AgentEngine {
                         .await;
                 }
 
-                AgentMessage::StartGoal(goal, screenshots) => {
-                    info!("Received goal: {} (screenshots: {})", goal, screenshots);
-                    let session_id = format!("sess_{}", chrono::Utc::now().timestamp());
-                    
-                    // Log session to DB FIRST to satisfy foreign key constraints
+                AgentMessage::EndSession => {
+                    info!("Ending current session.");
+                    Self::finalize_active_session(&mut active, &session_manager, &update_tx).await;
+                    active = None;
+                    let _ = update_tx.send(AgentUpdate::ActiveSessionChanged(None)).await;
+                    let _ = update_tx
+                        .send(AgentUpdate::AgentReply(
+                            "📦 Session ended and saved.".to_string(),
+                        ))
+                        .await;
+                }
+
+                AgentMessage::NewSession => {
+                    info!("Starting a new session (closing current).");
+                    Self::finalize_active_session(&mut active, &session_manager, &update_tx).await;
+                    active = None;
+                    let _ = update_tx.send(AgentUpdate::ActiveSessionChanged(None)).await;
+                    let _ = update_tx
+                        .send(AgentUpdate::AgentReply(
+                            "🆕 New session. Send a goal to begin.".to_string(),
+                        ))
+                        .await;
+                }
+
+                AgentMessage::SwitchSession(target_id) => {
+                    info!("Switching to session: {}", target_id);
+                    // Finalize outgoing session first
+                    Self::finalize_active_session(&mut active, &session_manager, &update_tx).await;
+                    active = None;
+
                     if let Some(ref mgr) = session_manager {
-                        let session = crate::db::Session {
-                            id: session_id.clone(),
-                            timestamp: chrono::Utc::now(),
-                            goal: goal.clone(),
-                            status: "in_progress".to_string(),
-                            summary: None,
-                            chat_log_path: None,
-                            yaml_path: None,
-                        };
-                        if let Err(e) = mgr.insert_session(&session) {
-                            error!("Failed to log session to DB: {}", e);
+                        if let Ok(Some(loaded)) = mgr.get_session(&target_id) {
+                            let rig_history: Vec<Message> = loaded
+                                .rig_history_json
+                                .as_deref()
+                                .and_then(|s| serde_json::from_str(s).ok())
+                                .unwrap_or_default();
+
+                            active = Some(ActiveSession {
+                                id: loaded.id.clone(),
+                                goal: loaded.goal.clone(),
+                                created_at: loaded.timestamp,
+                                rig_history,
+                                step_history: Arc::new(Mutex::new(Vec::new())),
+                                yaml_path: loaded.yaml_path.clone(),
+                                screenshots: true,
+                            });
+
+                            let _ = update_tx
+                                .send(AgentUpdate::ActiveSessionChanged(Some(target_id.clone())))
+                                .await;
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(format!(
+                                    "↩ Switched to session {}",
+                                    target_id
+                                )))
+                                .await;
+                        } else {
+                            let _ = update_tx
+                                .send(AgentUpdate::AgentReply(format!(
+                                    "❌ Session {} not found",
+                                    target_id
+                                )))
+                                .await;
                         }
                     }
+                }
 
-                    // Save user message to DB
+                AgentMessage::StartGoal(goal, screenshots) => {
+                    info!("Received goal: {} (screenshots: {})", goal, screenshots);
+
+                    // Resolve session id: reuse active or mint a new one.
+                    let (session_id, is_continuation) = match &active {
+                        Some(s) => (s.id.clone(), true),
+                        None => {
+                            let new_id = format!("sess_{}", chrono::Utc::now().timestamp());
+                            (new_id, false)
+                        }
+                    };
+
+                    if is_continuation {
+                        info!("Continuing active session {}", session_id);
+                        // Append the new goal to the existing goal string for context.
+                        if let Some(ref mut a) = active {
+                            a.goal = format!("{}\n---\n{}", a.goal, goal);
+                        }
+                    } else {
+                        // Create the DB row up front to satisfy FK constraints.
+                        if let Some(ref mgr) = session_manager {
+                            let session = crate::db::Session {
+                                id: session_id.clone(),
+                                timestamp: chrono::Utc::now(),
+                                goal: goal.clone(),
+                                status: "in_progress".to_string(),
+                                summary: None,
+                                chat_log_path: None,
+                                yaml_path: None,
+                                rig_history_json: None,
+                            };
+                            if let Err(e) = mgr.insert_session(&session) {
+                                error!("Failed to log session to DB: {}", e);
+                            }
+                        }
+
+                        active = Some(ActiveSession {
+                            id: session_id.clone(),
+                            goal: goal.clone(),
+                            created_at: chrono::Utc::now(),
+                            rig_history: Vec::new(),
+                            step_history: Arc::new(Mutex::new(Vec::new())),
+                            yaml_path: None,
+                            screenshots,
+                        });
+                    }
+
+                    // Persist user message in chat_messages (always, per turn)
                     if let Some(ref mgr) = session_manager {
                         let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
                             id: None,
@@ -213,23 +351,63 @@ impl AgentEngine {
                     }
 
                     let _ = update_tx
+                        .send(AgentUpdate::ActiveSessionChanged(Some(session_id.clone())))
+                        .await;
+                    let _ = update_tx
                         .send(AgentUpdate::AgentReply(format!(
-                            "🎯 Starting: \"{}\" (ID: {})",
-                            goal, session_id
+                            "🎯 {} (session {}): \"{}\"",
+                            if is_continuation { "Continuing" } else { "Starting" },
+                            session_id,
+                            goal
                         )))
                         .await;
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Thinking))
                         .await;
 
-                    let result = rig_agent.think(&goal, screenshots).await;
-                    let mut yaml_path = None;
-                    let mut status = "success".to_string();
-                    let mut summary = None;
+                    // -----------------------------------------------------------------
+                    // P4: Auto-observe the current screen state and prepend it to
+                    // the LLM input. This handles the "user manually changed apps
+                    // between prompts" case automatically.
+                    // -----------------------------------------------------------------
+                    let llm_prompt = match device.observe_ui().await {
+                        Ok(xml) => {
+                            let compressed = compress_xml(&xml);
+                            format!(
+                                "[Auto-observed current screen state]\n{}\n\nUser request: {}",
+                                compressed, goal
+                            )
+                        }
+                        Err(e) => {
+                            error!("Auto-observe failed ({}); sending goal only.", e);
+                            goal.clone()
+                        }
+                    };
 
-                    match result {
+                    // Split borrows for the duration of the think() call.
+                    let (mut history_ref, step_history, session_screenshots) = {
+                        let a = active
+                            .as_mut()
+                            .expect("active session must be set before StartGoal");
+                        (a.rig_history.clone(), a.step_history.clone(), a.screenshots)
+                    };
+
+                    let think_result = rig_agent
+                        .think(&llm_prompt, session_screenshots, &mut history_ref, step_history.clone())
+                        .await;
+
+                    // Write the (potentially updated) history back into active.
+                    if let Some(ref mut a) = active {
+                        a.rig_history = history_ref;
+                    }
+
+                    let mut status = "success".to_string();
+                    let mut final_reply: Option<String> = None;
+                    let mut summary: Option<String> = None;
+
+                    match think_result {
                         Ok(res) => {
-                            // Save assistant message to DB
+                            // Save assistant message
                             if let Some(ref mgr) = session_manager {
                                 let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
                                     id: None,
@@ -240,43 +418,33 @@ impl AgentEngine {
                                 });
                             }
 
-                            // Generate AI summary
-                            if let Ok(h) = rig_agent.history.lock() {
-                                if let Ok(s) = rig_agent.generate_summary(&goal, &h, &res).await {
-                                    summary = Some(s);
+                            // Generate AI summary from step history
+                            if let Some(ref a) = active {
+                                if let Ok(h) = a.step_history.lock() {
+                                    if !h.is_empty() {
+                                        if let Ok(s) = rig_agent
+                                            .generate_summary(&a.goal, &h, &res)
+                                            .await
+                                        {
+                                            summary = Some(s);
+                                        }
+                                    }
                                 }
                             }
 
                             let _ = update_tx
                                 .send(AgentUpdate::AgentReply(format!("✅ Done: {}", res)))
                                 .await;
-                            
-                            // Generate YAML test case
-                            if let Ok(h) = rig_agent.history.lock() {
-                                if !h.is_empty() {
-                                    let tc = crate::yaml_exporter::TestCase {
-                                        goal: goal.clone(),
-                                        screenshots,
-                                        steps: h.clone(),
-                                        success: true,
-                                    };
-                                    match crate::yaml_exporter::export(&tc) {
-                                        Ok(path) => {
-                                            yaml_path = Some(path.to_string_lossy().to_string());
-                                            let _ = update_tx.send(AgentUpdate::TestGenerated(path)).await;
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to export YAML test case: {}", e);
-                                        }
-                                    }
-                                }
-                            }
+                            final_reply = Some(res);
                         }
                         Err(e) => {
                             error!("Agent failed: {}", e);
                             status = format!("error: {}", e);
-
-                            // Save error message as assistant reply to DB
+                            let _ = update_tx
+                                .send(AgentUpdate::StatusChanged(AgentStatus::Error(
+                                    e.to_string(),
+                                )))
+                                .await;
                             if let Some(ref mgr) = session_manager {
                                 let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
                                     id: None,
@@ -286,37 +454,98 @@ impl AgentEngine {
                                     timestamp: chrono::Utc::now(),
                                 });
                             }
-
-                            let _ = update_tx
-                                .send(AgentUpdate::StatusChanged(AgentStatus::Error(
-                                    e.to_string(),
-                                )))
-                                .await;
                         }
                     }
 
-                    // Update session in DB
+                    // Persist rig history and step history → YAML on every turn.
+                    if let Some(ref mut a) = active {
+                        // Save rig history JSON
+                        if let Some(ref mgr) = session_manager {
+                            let json = serde_json::to_string(&a.rig_history).ok();
+                            if let Err(e) = mgr.update_rig_history(&a.id, json.as_deref()) {
+                                error!("Failed to update rig_history: {}", e);
+                            }
+                        }
+
+                        // Write / overwrite YAML test case
+                        if let Ok(h) = a.step_history.lock() {
+                            if !h.is_empty() {
+                                let tc = crate::yaml_exporter::TestCase {
+                                    goal: a.goal.clone(),
+                                    screenshots: a.screenshots,
+                                    steps: h.clone(),
+                                    success: status == "success",
+                                };
+
+                                // Stable per-session path. The first turn picks a
+                                // filename; subsequent turns overwrite the same file.
+                                let yaml_path = if let Some(p) = &a.yaml_path {
+                                    std::path::PathBuf::from(p)
+                                } else {
+                                    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                                    let results_dir = home.join("mobie-results");
+                                    let _ = std::fs::create_dir_all(&results_dir);
+                                    let filename = format!("{}.yaml", a.id);
+                                    let p = results_dir.join(&filename);
+                                    a.yaml_path = Some(p.to_string_lossy().to_string());
+                                    p
+                                };
+
+                                match crate::yaml_exporter::export_to_path(&tc, &yaml_path) {
+                                    Ok(()) => {
+                                        let _ = update_tx
+                                            .send(AgentUpdate::TestGenerated(yaml_path.clone()))
+                                            .await;
+                                    }
+                                    Err(e) => error!("Failed to write YAML test case: {}", e),
+                                }
+                            }
+                        }
+                    }
+
+                    // Update the session row
                     if let Some(ref mgr) = session_manager {
-                        let session = crate::db::Session {
-                            id: session_id,
-                            timestamp: chrono::Utc::now(),
-                            goal: goal.clone(),
-                            status,
-                            summary,
-                            chat_log_path: None,
-                            yaml_path,
-                        };
-                        if let Err(e) = mgr.update_session(&session) {
-                            error!("Failed to update session in DB: {}", e);
-                        } else {
-                            let _ = update_tx.send(AgentUpdate::SessionSaved).await;
+                        if let Some(ref a) = active {
+                            let session = crate::db::Session {
+                                id: a.id.clone(),
+                                timestamp: chrono::Utc::now(),
+                                goal: a.goal.clone(),
+                                status: status.clone(),
+                                summary: summary.clone(),
+                                chat_log_path: None,
+                                yaml_path: a.yaml_path.clone(),
+                                rig_history_json: serde_json::to_string(&a.rig_history).ok(),
+                            };
+                            if let Err(e) = mgr.update_session(&session) {
+                                error!("Failed to update session in DB: {}", e);
+                            } else {
+                                let _ = update_tx.send(AgentUpdate::SessionSaved).await;
+                            }
+
+                            // Push a state snapshot for the UI status bar
+                            let turn_count = a.rig_history.len();
+                            let step_count = a
+                                .step_history
+                                .lock()
+                                .map(|h| h.len())
+                                .unwrap_or(0);
+                            let _ = update_tx
+                                .send(AgentUpdate::SessionStateUpdate(SessionState {
+                                    id: a.id.clone(),
+                                    status: status.clone(),
+                                    yaml_path: a.yaml_path.clone(),
+                                    turn_count,
+                                    step_count,
+                                }))
+                                .await;
                         }
                     }
 
                     let _ = update_tx
                         .send(AgentUpdate::StatusChanged(AgentStatus::Idle))
                         .await;
-                }
+                            let _ = final_reply; // already sent
+                        }
 
                 AgentMessage::RetestScenario(path) => {
                     info!("Retesting scenario from: {:?}", path);
@@ -377,7 +606,6 @@ impl AgentEngine {
                                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                             }
 
-                            // Export retest results if screenshots were taken
                             if tc.screenshots {
                                 let retest_tc = crate::yaml_exporter::TestCase {
                                     goal: format!("Retest: {}", tc.goal),
@@ -400,7 +628,6 @@ impl AgentEngine {
                         let _ = update_tx.send(AgentUpdate::AgentReply("❌ Failed to read test case file.".to_string())).await;
                     }
 
-                    // Log Retest to DB
                     if let Some(ref mgr) = session_manager {
                         let session = crate::db::Session {
                             id: session_id.clone(),
@@ -410,9 +637,9 @@ impl AgentEngine {
                             summary: None,
                             chat_log_path: None,
                             yaml_path: yaml_output_path,
+                            rig_history_json: None,
                         };
                         if mgr.insert_session(&session).is_ok() {
-                            // Save initial retest message
                             let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
                                 id: None,
                                 session_id: session_id.clone(),
@@ -425,7 +652,6 @@ impl AgentEngine {
                         }
                     }
 
-                    // Save completion message
                     if let Some(ref mgr) = session_manager {
                         let _ = mgr.insert_chat_message(&crate::db::ChatMessage {
                             id: None,
@@ -439,7 +665,7 @@ impl AgentEngine {
                             timestamp: chrono::Utc::now(),
                         });
                     }
-                    
+
                     let _ = update_tx.send(AgentUpdate::StatusChanged(AgentStatus::Idle)).await;
                 }
 
@@ -460,6 +686,7 @@ impl AgentEngine {
 
                 AgentMessage::ClearAllHistory => {
                     info!("Clearing all session history and artifacts.");
+                    active = None;
                     if let Some(ref mgr) = session_manager {
                         if let Err(e) = mgr.clear_all_sessions() {
                             error!("Failed to clear sessions in DB: {}", e);
@@ -469,6 +696,35 @@ impl AgentEngine {
                         error!("Failed to clear artifacts on disk: {}", e);
                     }
                     let _ = update_tx.send(AgentUpdate::HistoryCleared).await;
+                    let _ = update_tx.send(AgentUpdate::ActiveSessionChanged(None)).await;
+                }
+            }
+        }
+    }
+
+    /// Finalize the active session: write its final YAML, mark the DB row
+    /// as completed. Called by `EndSession`, `NewSession`, and `SwitchSession`.
+    async fn finalize_active_session(
+        active: &mut Option<ActiveSession>,
+        session_manager: &Option<crate::db::SessionManager>,
+        update_tx: &mpsc::Sender<AgentUpdate>,
+    ) {
+        if let Some(a) = active.as_ref() {
+            if let Some(ref mgr) = session_manager {
+                let session = crate::db::Session {
+                    id: a.id.clone(),
+                    timestamp: chrono::Utc::now(),
+                    goal: a.goal.clone(),
+                    status: "completed".to_string(),
+                    summary: None,
+                    chat_log_path: None,
+                    yaml_path: a.yaml_path.clone(),
+                    rig_history_json: serde_json::to_string(&a.rig_history).ok(),
+                };
+                if let Err(e) = mgr.update_session(&session) {
+                    error!("Failed to finalize session: {}", e);
+                } else {
+                    let _ = update_tx.send(AgentUpdate::SessionSaved).await;
                 }
             }
         }
@@ -479,25 +735,18 @@ impl AgentEngine {
         info!("Refreshing device list...");
         let mut final_list = Vec::new();
 
-        // 1. Get all registered AVD names
         let avds = device.list_avds().await.unwrap_or_default();
-
-        // 2. Get currently online ADB serials
         let online_serials = device.list_devices().await.unwrap_or_default();
 
-        // 3. Map AVDs to their current status
         for name in avds {
             let status = device
                 .get_avd_status(&name)
                 .await
                 .unwrap_or(DeviceStatus::Offline);
 
-            // If the AVD is online, get_avd_status logic uses its serial.
-            // We want the UI to primarily show the AVD name.
             final_list.push((name, status));
         }
 
-        // 4. Add any online devices that are NOT emulators (e.g. physical hardware)
         for serial in online_serials {
             if !serial.starts_with("emulator-") {
                 final_list.push((serial, DeviceStatus::Online));
@@ -519,8 +768,8 @@ mod tests {
         let (_engine, _) = AgentEngine::start(update_tx, config);
     }
 
-    #[tokio::test]
-    async fn test_agent_generates_yaml_on_success() {
+    #[test]
+    fn test_agent_generates_yaml_on_success() {
         let update = AgentUpdate::TestGenerated(std::path::PathBuf::from("test.yaml"));
         if let AgentUpdate::TestGenerated(p) = update {
             assert_eq!(p.to_str().unwrap(), "test.yaml");
@@ -529,13 +778,42 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_agent_handles_retest_scenario_msg() {
+    #[test]
+    fn test_agent_handles_retest_scenario_msg() {
         let msg = AgentMessage::RetestScenario(std::path::PathBuf::from("test.yaml"));
         if let AgentMessage::RetestScenario(p) = msg {
             assert_eq!(p.to_str().unwrap(), "test.yaml");
         } else {
             panic!("RetestScenario not found");
         }
+    }
+
+    #[test]
+    fn test_session_state_serializes() {
+        let s = SessionState {
+            id: "sess_123".into(),
+            status: "success".into(),
+            yaml_path: Some("/tmp/sess_123.yaml".into()),
+            turn_count: 2,
+            step_count: 5,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let de: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, s);
+    }
+
+    #[test]
+    fn test_active_session_struct_holds_rig_history() {
+        let a = ActiveSession {
+            id: "s1".into(),
+            goal: "open settings".into(),
+            created_at: chrono::Utc::now(),
+            rig_history: vec![],
+            step_history: Arc::new(Mutex::new(Vec::new())),
+            yaml_path: None,
+            screenshots: true,
+        };
+        assert_eq!(a.id, "s1");
+        assert!(a.rig_history.is_empty());
     }
 }

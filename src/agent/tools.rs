@@ -329,6 +329,7 @@ pub struct ScreenshotArgs {
 pub struct Screenshot {
     pub device: Arc<DeviceBridge>,
     pub history: Arc<Mutex<Vec<TestStep>>>,
+    pub screenshots: bool,
 }
 
 impl Tool for Screenshot {

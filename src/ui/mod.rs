@@ -10,6 +10,7 @@ use crate::config::{save_config, AppConfig};
 use crate::device::DeviceStatus;
 use crate::llm::LlmConfig;
 
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -36,7 +37,9 @@ actions!(
         SelectLeft,
         SelectRight,
         SelectHome,
-        SelectEnd
+        SelectEnd,
+        NewSession,
+        EndSession
     ]
 );
 
@@ -957,7 +960,13 @@ pub struct MobieWorkspace {
     sessions: Vec<crate::db::Session>,
     selected_session: Option<crate::db::Session>,
     selected_test_case: Option<crate::yaml_exporter::TestCase>,
-    
+
+    /// The active multi-turn session ID, if any. Mirrors the engine's state.
+    /// `None` means the next `StartGoal` will mint a fresh session.
+    active_session_id: Option<String>,
+    /// Latest state snapshot pushed by the engine for the status bar.
+    session_state: Option<crate::agent::SessionState>,
+
     // Image Preview
     preview_image_path: Option<String>,
     preview_zoom: f32,
@@ -1051,6 +1060,8 @@ impl MobieWorkspace {
                                 workspace.selected_session = None;
                                 workspace.selected_test_case = None;
                                 workspace.latest_test = None;
+                                workspace.active_session_id = None;
+                                workspace.session_state = None;
                                 workspace.current_view = AppView::Chat;
                             }
                             AgentUpdate::ModelsFetched(models) => {
@@ -1063,6 +1074,12 @@ impl MobieWorkspace {
                                     role: ChatRole::System,
                                     content: format!("⚠️ Failed to fetch models: {}", e),
                                 });
+                            }
+                            AgentUpdate::ActiveSessionChanged(id) => {
+                                workspace.active_session_id = id;
+                            }
+                            AgentUpdate::SessionStateUpdate(state) => {
+                                workspace.session_state = Some(state);
                             }
                         }
                         cx.notify();
@@ -1114,6 +1131,8 @@ impl MobieWorkspace {
             sessions,
             selected_session: None,
             selected_test_case: None,
+            active_session_id: None,
+            session_state: None,
             preview_image_path: None,
             preview_zoom: 1.0,
             chat_input,
@@ -1192,6 +1211,33 @@ impl MobieWorkspace {
         let tx = self.cmd_tx.clone();
         cx.spawn(async move |_, _| {
             let _ = tx.send(AgentMessage::ClearAllHistory).await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn new_session(&mut self, _: &NewSession, _window: &mut Window, cx: &mut Context<Self>) {
+        let tx = self.cmd_tx.clone();
+        cx.spawn(async move |_, _| {
+            let _ = tx.send(AgentMessage::NewSession).await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn end_session(&mut self, _: &EndSession, _window: &mut Window, cx: &mut Context<Self>) {
+        let tx = self.cmd_tx.clone();
+        cx.spawn(async move |_, _| {
+            let _ = tx.send(AgentMessage::EndSession).await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn switch_session(&mut self, session_id: String, cx: &mut Context<Self>) {
+        let tx = self.cmd_tx.clone();
+        cx.spawn(async move |_, _| {
+            let _ = tx.send(AgentMessage::SwitchSession(session_id)).await;
         })
         .detach();
         cx.notify();
@@ -1848,6 +1894,100 @@ impl MobieWorkspace {
         let is_idle = self.agent_status == AgentStatus::Idle;
         let has_text = !self.chat_input.read(cx).text().is_empty();
         let can_send = is_idle && has_text;
+        let has_active = self.active_session_id.is_some();
+
+        // Top row: session status / controls
+        let session_bar = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .pb(px(8.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0x666688))
+                            .child(if let Some(id) = &self.active_session_id {
+                                let state_label = self
+                                    .session_state
+                                    .as_ref()
+                                    .map(|s| {
+                                        format!(
+                                            " · {} turn(s), {} step(s)",
+                                            s.turn_count, s.step_count
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                                format!("● Session: {}{}", id, state_label)
+                            } else {
+                                "○ No active session".to_string()
+                            }),
+                    )
+                    .when_some(self.session_state.as_ref(), |d, s| {
+                        d.when(!s.status.is_empty() && s.status != "in_progress", |d2| {
+                            d2.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(match s.status.as_str() {
+                                        "success" | "completed" => rgb(0x44ff88),
+                                        _ => rgb(0xff4444),
+                                    })
+                                    .child(format!(" [{}]", s.status)),
+                            )
+                        })
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.0))
+                    // New session button - always visible
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .bg(rgb(0x2a4a2a))
+                            .hover(|s| s.bg(rgb(0x3a6a3a)))
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0x44ff88))
+                            .cursor_pointer()
+                            .child("+ New Session")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.new_session(&NewSession, window, cx);
+                                }),
+                            ),
+                    )
+                    // End session button - only when active
+                    .when(has_active, |d| {
+                        d.child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(4.0))
+                                .bg(rgb(0x4a2a2a))
+                                .hover(|s| s.bg(rgb(0x6a3a3a)))
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0xff8888))
+                                .cursor_pointer()
+                                .child("■ End Session")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.end_session(&EndSession, window, cx);
+                                    }),
+                                ),
+                        )
+                    }),
+            );
 
         div()
             .border_t_1()
@@ -1855,47 +1995,55 @@ impl MobieWorkspace {
             .p(px(16.0))
             .w_full()
             .flex()
-            .items_end()
-            .gap(px(12.0))
+            .flex_col()
+            .gap(px(8.0))
+            .child(session_bar)
             .child(
                 div()
-                    .flex_1()
-                    .bg(rgb(0x16213e))
-                    .rounded(px(12.0))
-                    .p(px(14.0))
-                    .child(self.chat_input.clone()),
-            )
-            .child(
-                div()
-                    .cursor_pointer()
-                    .bg(if can_send {
-                        rgb(0xe94560)
-                    } else {
-                        rgb(0x2a2a4a)
-                    })
-                    .hover(|s| {
-                        if can_send {
-                            s.bg(rgb(0xff5c77))
-                        } else {
-                            s
-                        }
-                    })
-                    .rounded(px(12.0))
-                    .py(px(14.0))
-                    .px(px(20.0))
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(if can_send {
-                        rgb(0xffffff)
-                    } else {
-                        rgb(0x888899)
-                    })
-                    .child("Send")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.send_message(&SendMessage, window, cx);
-                        }),
+                    .w_full()
+                    .flex()
+                    .items_end()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .bg(rgb(0x16213e))
+                            .rounded(px(12.0))
+                            .p(px(14.0))
+                            .child(self.chat_input.clone()),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .bg(if can_send {
+                                rgb(0xe94560)
+                            } else {
+                                rgb(0x2a2a4a)
+                            })
+                            .hover(|s| {
+                                if can_send {
+                                    s.bg(rgb(0xff5c77))
+                                } else {
+                                    s
+                                }
+                            })
+                            .rounded(px(12.0))
+                            .py(px(14.0))
+                            .px(px(20.0))
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if can_send {
+                                rgb(0xffffff)
+                            } else {
+                                rgb(0x888899)
+                            })
+                            .child(if has_active { "Continue" } else { "Send" })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.send_message(&SendMessage, window, cx);
+                                }),
+                            ),
                     ),
             )
     }
@@ -1977,6 +2125,29 @@ impl MobieWorkspace {
                         div()
                             .flex()
                             .gap(px(8.0))
+                            .child(
+                                div()
+                                    .p_2()
+                                    .rounded(px(6.0))
+                                    .bg(rgb(0x2a3a4a))
+                                    .hover(|s| s.bg(rgb(0x3a5a7a)))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let session_id = session.id.clone();
+                                        cx.listener(move |this, _, _, cx| {
+                                            // Switch the active session and return to chat
+                                            this.switch_session(session_id.clone(), cx);
+                                            this.current_view = AppView::Chat;
+                                            this.chat_scroll_handle.scroll_to_bottom();
+                                        })
+                                    })
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0x88ccff))
+                                            .child("↩ Resume"),
+                                    ),
+                            )
                             .child(
                                 div()
                                     .p_2()

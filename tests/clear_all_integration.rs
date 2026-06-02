@@ -57,6 +57,7 @@ fn test_clear_all_integration() -> Result<()> {
             summary: None,
             chat_log_path: None,
             yaml_path: Some(yaml_file.to_string_lossy().to_string()),
+            rig_history_json: None,
         })?;
     }
 

@@ -13,6 +13,11 @@ pub struct Session {
     pub summary: Option<String>,
     pub chat_log_path: Option<String>,
     pub yaml_path: Option<String>,
+    /// Serialized `Vec<rig::completion::Message>` storing the full LLM
+    /// conversation history (user prompts, assistant replies, tool calls,
+    /// tool results) so multi-turn sessions can be resumed across prompts.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub rig_history_json: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -57,13 +62,16 @@ impl SessionManager {
                 status TEXT NOT NULL,
                 summary TEXT,
                 chat_log_path TEXT,
-                yaml_path TEXT
+                yaml_path TEXT,
+                rig_history_json TEXT
             )",
             [],
         ).context("Failed to initialize database schema")?;
 
         // Migration: ensure summary column exists (ignore error if already exists)
         let _ = self.conn.execute("ALTER TABLE sessions ADD COLUMN summary TEXT", []);
+        // Migration: ensure rig_history_json column exists (added in v0.2 for multi-turn)
+        let _ = self.conn.execute("ALTER TABLE sessions ADD COLUMN rig_history_json TEXT", []);
 
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS chat_messages (
@@ -82,8 +90,8 @@ impl SessionManager {
 
     pub fn insert_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO sessions (id, timestamp, goal, status, summary, chat_log_path, yaml_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO sessions (id, timestamp, goal, status, summary, chat_log_path, yaml_path, rig_history_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 session.id,
                 session.timestamp.to_rfc3339(),
@@ -92,6 +100,7 @@ impl SessionManager {
                 session.summary,
                 session.chat_log_path,
                 session.yaml_path,
+                session.rig_history_json,
             ],
         ).context("Failed to insert session into database")?;
         Ok(())
@@ -99,7 +108,7 @@ impl SessionManager {
 
     pub fn get_all_sessions(&self) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, goal, status, summary, chat_log_path, yaml_path FROM sessions ORDER BY timestamp DESC"
+            "SELECT id, timestamp, goal, status, summary, chat_log_path, yaml_path, rig_history_json FROM sessions ORDER BY timestamp DESC"
         ).context("Failed to prepare SELECT statement")?;
 
         let session_iter = stmt.query_map([], |row| {
@@ -116,6 +125,7 @@ impl SessionManager {
                 summary: row.get(4)?,
                 chat_log_path: row.get(5)?,
                 yaml_path: row.get(6)?,
+                rig_history_json: row.get(7)?,
             })
         }).context("Failed to query sessions")?;
 
@@ -124,6 +134,46 @@ impl SessionManager {
             sessions.push(session.context("Failed to parse session row")?);
         }
         Ok(sessions)
+    }
+
+    /// Fetch a single session by ID. Returns `None` if not found.
+    pub fn get_session(&self, id: &str) -> Result<Option<Session>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, goal, status, summary, chat_log_path, yaml_path, rig_history_json FROM sessions WHERE id = ?1"
+        ).context("Failed to prepare SELECT statement")?;
+
+        let mut iter = stmt.query_map(params![id], |row| {
+            let timestamp_str: String = row.get(1)?;
+            let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+
+            Ok(Session {
+                id: row.get(0)?,
+                timestamp,
+                goal: row.get(2)?,
+                status: row.get(3)?,
+                summary: row.get(4)?,
+                chat_log_path: row.get(5)?,
+                yaml_path: row.get(6)?,
+                rig_history_json: row.get(7)?,
+            })
+        }).context("Failed to query session")?;
+
+        match iter.next() {
+            Some(s) => Ok(Some(s.context("Failed to parse session row")?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Update the `rig_history_json` column for a session. Used after each
+    /// turn to persist the full LLM conversation history.
+    pub fn update_rig_history(&self, id: &str, history_json: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET rig_history_json = ?2 WHERE id = ?1",
+            params![id, history_json],
+        ).context("Failed to update rig_history_json")?;
+        Ok(())
     }
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
@@ -144,7 +194,7 @@ impl SessionManager {
 
     pub fn update_session(&self, session: &Session) -> Result<()> {
         self.conn.execute(
-            "UPDATE sessions SET timestamp = ?2, goal = ?3, status = ?4, summary = ?5, chat_log_path = ?6, yaml_path = ?7 WHERE id = ?1",
+            "UPDATE sessions SET timestamp = ?2, goal = ?3, status = ?4, summary = ?5, chat_log_path = ?6, yaml_path = ?7, rig_history_json = ?8 WHERE id = ?1",
             params![
                 session.id,
                 session.timestamp.to_rfc3339(),
@@ -153,6 +203,7 @@ impl SessionManager {
                 session.summary,
                 session.chat_log_path,
                 session.yaml_path,
+                session.rig_history_json,
             ],
         ).context("Failed to update session in database")?;
         Ok(())
@@ -219,6 +270,7 @@ mod tests {
             summary: Some("Summary".to_string()),
             chat_log_path: Some("/tmp/chat.log".to_string()),
             yaml_path: Some("/tmp/test.yaml".to_string()),
+            rig_history_json: None,
         };
 
         manager.insert_session(&session)?;
@@ -252,6 +304,7 @@ mod tests {
                 summary: None,
                 chat_log_path: None,
                 yaml_path: None,
+                rig_history_json: None,
             })?;
         }
 
@@ -261,6 +314,45 @@ mod tests {
         manager.clear_all_sessions()?;
         let sessions = manager.get_all_sessions()?;
         assert_eq!(sessions.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rig_history_round_trip() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("test_rig_history.db");
+        let manager = SessionManager::new(db_path)?;
+
+        let id = "sess_history";
+        let json = Some(r#"[{"role":"user","content":[{"type":"text","text":"hi"}]}]"#.to_string());
+
+        manager.insert_session(&Session {
+            id: id.to_string(),
+            timestamp: Utc::now(),
+            goal: "Test".to_string(),
+            status: "in_progress".to_string(),
+            summary: None,
+            chat_log_path: None,
+            yaml_path: None,
+            rig_history_json: json.clone(),
+        })?;
+
+        let loaded = manager.get_session(id)?;
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().rig_history_json, json);
+
+        // Update the history (simulating a second turn)
+        let updated = Some(r#"[{"role":"user","content":[{"type":"text","text":"hi"}]},{"role":"assistant","content":[{"type":"text","text":"hello"}]}]"#.to_string());
+        manager.update_rig_history(id, updated.as_deref())?;
+
+        let reloaded = manager.get_session(id)?.unwrap();
+        assert_eq!(reloaded.rig_history_json, updated);
+
+        // Clear
+        manager.update_rig_history(id, None)?;
+        let cleared = manager.get_session(id)?.unwrap();
+        assert_eq!(cleared.rig_history_json, None);
 
         Ok(())
     }
